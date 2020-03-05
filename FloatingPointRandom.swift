@@ -222,14 +222,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if exponentBitPattern == 0 { return significandBitPattern }
     let shift = exponentBitPattern &- max(1, minExponent)
     
-    // Note: we *do* allow the high bit to overflow by one place, if all the
-    // other bits are zero. This will only occur when a one-sided range has a
-    // bound with significand 0 and raw exponent just beyond what can be
-    // counted in ulps without overflowing. In particular, the highest value
-    // *within* the range has the next lower exponent, and will not overflow.
-    // In that case, the call-site will immediately subtract 1, making the
-    // result wrap back around to the maximum value as intended.
-    precondition((Self.spareBitCount > shift) || ((shift == Self.spareBitCount) && (significandBitPattern == 0)))
+    // The just-beyond-the-end position wraps around to zero.
+    if (shift == Self.spareBitCount) && (significandBitPattern == 0) {
+      return 0
+    }
+    
+    precondition(Self.spareBitCount > shift)
     return (Self.uncheckedImplicitBit | significandBitPattern) &<< shift
   }
   
