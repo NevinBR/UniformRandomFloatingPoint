@@ -104,7 +104,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     // Find section numbers
     let low = a.integerPosition(maxExponent: e)
-    let high = b.nextDown.integerPosition(maxExponent: e)
+    let h1 = b.integerPosition(maxExponent: e) &- 1
+    let h2 = b.nextDown.integerPosition(maxExponent: e)
+    let high = max(h1, h2)
     
     while true {
       let n = Int64.random(in: low...high, using: &generator)
