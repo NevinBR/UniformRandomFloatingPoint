@@ -282,7 +282,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     precondition(e < eMax, "Exponent exceeds maximum")
     
     if sign == .minus {
-      let n = self.nextUp.integerPositionPositive(maxExponent: eMax)
+      let n1 = self.integerPositionPositive(maxExponent: eMax) &- 1
+      let n2 = self.nextUp.integerPositionPositive(maxExponent: eMax)
+      let n = max(n1, n2)
       return -1 &- Int64(truncatingIfNeeded: n)
     }
     
