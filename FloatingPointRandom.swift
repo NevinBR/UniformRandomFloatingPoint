@@ -380,7 +380,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if range.isEmpty { return a }
     
     if a < 0 {
-      guard let x = randomInSinglePositiveBinade(-b ..< -a, using: &generator) else {
+      guard let x = randomInSinglePositiveBinade(abs(b) ..< abs(a), using: &generator) else {
         return nil
       }
       return (-x).nextDown
