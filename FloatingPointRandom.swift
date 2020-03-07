@@ -293,7 +293,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
-  // Take the range withou lower bound 0 and upper bound having raw exponent
+  // Take the range with lower bound 0 and upper bound having raw exponent
   // equal to maxExponent+1 and 0 significand, and split it into 2^64 sections.
   // Find which section the absolute value of self falls in.
   func integerPositionPositive(maxExponent eMax: RawExponent) -> UInt64 {
