@@ -299,11 +299,18 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   func integerPositionPositive(maxExponent eMax: RawExponent) -> UInt64 {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
+    precondition(eMax > 0)
     precondition(e <= eMax, "Exponent exceeds maximum")
     
     let w = UInt64.bitWidth
     let z = eMax &- max(1, e)
-    let bitsNeeded = (z < w) ? (w &- 1 &- Int(truncatingIfNeeded: z)) : 0
+    
+    if z >= w {
+      if (e != 0) && (z == w) { return 1 }
+      return 0
+    }
+    
+    let bitsNeeded = w &- 1 &- Int(truncatingIfNeeded: z)
     let shift = bitsNeeded &- Self.significandBitCount
     let n: UInt64
     
