@@ -276,16 +276,16 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
     if (e == eMax) && (s == 0) {
-      return (sign == .plus) ? .max : .min
+      return (self < 0) ? .min : .max
     }
     
     precondition(e < eMax, "Exponent exceeds maximum")
     
-    if sign == .minus {
+    if self < 0 {
       let n1 = self.integerPositionPositive(maxExponent: eMax) &- 1
       let n2 = self.nextUp.integerPositionPositive(maxExponent: eMax)
-      let n = max(n1, n2)
-      return -1 &- Int64(truncatingIfNeeded: n)
+      let n = max(Int64(truncatingIfNeeded: n1), Int64(truncatingIfNeeded: n2))
+      return -1 &- n
     }
     
     let n = integerPositionPositive(maxExponent: eMax)
