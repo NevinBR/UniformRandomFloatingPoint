@@ -364,7 +364,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let s = sigBits & significandBitMask
     let x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
-    return needNextDown ? x : x.nextDown
+    return needNextDown ? x.nextDown : x
   }
   
   
