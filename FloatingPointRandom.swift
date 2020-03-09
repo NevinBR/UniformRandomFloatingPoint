@@ -4,8 +4,8 @@
 // numbers, with probability proportional to the distance between each
 // representable value and the next. In other words, the behavior is as if
 // choosing a real number in the range, and rounding down to the next
-// representible value. For closed ranges, we advance the upper bound one ulp
-// and form a half-open range.
+// representible value. For closed ranges, we extend it into a half-open range
+// bounded by upperBound.nextUp
 
 extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExponent: FixedWidthInteger {
   // MARK: Range
@@ -341,26 +341,34 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let z = m.leadingZeroBitCount
     let isNormal = z < eMax
     
+    let sign: FloatingPointSign = (n < 0) ? .minus : .plus
+    let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
+    
     let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
     let availableBitCount = w &- unusedBitCount
     let shift = significandBitCount &- availableBitCount
+    
     let sigBits: RawSignificand
+    var needNextDown = false
     
     if shift < 0 {
-      sigBits = RawSignificand(truncatingIfNeeded: m &>> -shift)
+      var k = m
+      if sign == .minus {
+        k = m &- 1
+        needNextDown = true
+      }
+      sigBits = RawSignificand(truncatingIfNeeded: k &>> -shift)
     } else {
       sigBits = RawSignificand(truncatingIfNeeded: m) &<< shift
     }
     
     let s = sigBits & significandBitMask
-    let sign: FloatingPointSign = (n < 0) ? .minus : .plus
-    let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
-    
-    return Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
+    let x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
+    return needNextDown ? x : x.nextDown
   }
   
   
-  // Get a random number in a single section (as defined above. Specifically,
+  // Get a random number in a single section (as defined above). Specifically,
   // either the entire range (except possibly the greater-magnitude bound) must
   // have the same raw exponent, or one bound must be zero and the other must
   // have raw significand equal to zero.
