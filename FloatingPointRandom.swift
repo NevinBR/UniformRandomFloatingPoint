@@ -218,7 +218,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   
   // Non-negative small ranges, counting distance in terms of the ulp of the
-  // lower bound. The
+  // lower bound.
   func positionInSmallPositiveRange(minExponent: RawExponent) -> RawSignificand {
     precondition(exponentBitPattern >= minExponent)
     if exponentBitPattern == 0 { return significandBitPattern }
