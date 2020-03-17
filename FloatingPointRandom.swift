@@ -78,7 +78,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     precondition(!range.isEmpty)
     precondition(range.lowerBound.isFinite)
     // If range.upperBound == .infinity, treat it as if it were one ulp above
-    // .greatestFinityMagnitude
+    // .greatestFiniteMagnitude
     
     // If the size of the range, counted in terms of the smallest ulp in the
     // range, fits in a RawSignificand, then we can choose a value directly.
@@ -103,15 +103,13 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let e = max(abs(a), abs(b)).nextDown.exponentBitPattern &+ 1
     
     // Find section numbers
-    let low = a.integerPosition(maxExponent: e)
-    let h1 = b.integerPosition(maxExponent: e) &- 1
-    let h2 = b.nextDown.integerPosition(maxExponent: e)
-    let high = max(h1, h2)
+    let (low, _) = a.sectionNumber(maxExponent: e)
+    let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
+    let high = isLowerBound ? h &- 1 : h
     
     while true {
-      let n = Int64.random(in: low...high, using: &generator)
-      let s = bounds(ofSection: n, maxExponent: e)
-      let x = uniformRandomInSection(s, using: &generator)
+      let s = Int64.random(in: low...high, using: &generator)
+      let x = uniformRandomInSection(s, maxExponent: e, using: &generator)
       if range.contains(x) { return x }
     }
   }
@@ -150,21 +148,19 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let isSameSign = (a.sign == b.sign) || (mMin == 0)
     
     if isSameSign {
-      let sign: FloatingPointSign = (a == 0) ? .plus : a.sign
+      let x: Self
       
       if eMax == eMin {
         // Single binade
         let n = RawSignificand.random(in: sMin...sMax, using: &generator)
-        let x = Self(sign: sign, exponentBitPattern: eMin, significandBitPattern: n)
-        return (sign == .plus) ? x : x.nextDown
+        x = Self(sign: .plus, exponentBitPattern: eMin, significandBitPattern: n)
         
       } else if (eMax &- eMin < spareBitCount) || (eMax == spareBitCount)  {
         // One-sided small range
         let low = mMin.positionInSmallPositiveRange(minExponent: eMin)
         let high = mMax.positionInSmallPositiveRange(minExponent: eMin) &- 1
         let r = RawSignificand.random(in: low...high, using: &generator)
-        let x = positiveValueAtPosition(r, minExponent: eMin)
-        return (sign == .plus) ? x : (-x).nextDown
+        x = positiveValueAtPosition(r, minExponent: eMin)
         
       } else if (eMax == 1) && (sMax < sMin) {
         // Adjacent binades (one subnormal), no spare bits
@@ -172,19 +168,22 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
         let r = RawSignificand.random(in: 0...high, using: &generator)
         let n = sMin &+ r
         let e = (n < sMin) ? eMax : eMin
-        let x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: n)
-        return (sign == .plus) ? x : x.nextDown
+        x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: n)
         
       } else if (eMax == eMin &+ 1) && (sMax < sMin &>> 1) {
-        // Adjacent binades (normal), no spare bits
+        // Adjacent binades (normal), 0 or 1 spare bits
         let high = (sMax &<< 1) &+ 1 &- sMin
         let r = RawSignificand.random(in: 0...high, using: &generator)
         let n = sMin &+ r
         let e = (n < sMin) ? eMax : eMin
         let s = (n < sMin) ? n &>> 1 : n
-        let x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
-        return (sign == .plus) ? x : x.nextDown
+        x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
+        
+      } else {
+        return nil
       }
+      
+      return (a < 0) ? (-x).nextDown : x
       
     } else if eMax < spareBitCount {
       // Two-sided small range
@@ -201,9 +200,10 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       let sign: FloatingPointSign = (r > threshold) ? .minus : .plus
       let n = (sign == .plus) ? r : (r &- threshold)
       return Self(sign: sign, exponentBitPattern: 0, significandBitPattern: n)
+      
+    } else {
+      return nil
     }
-    
-    return nil
   }
   
   
@@ -272,99 +272,63 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Take the range with bounds having raw exponent equal to maxExponent and
   // 0 significand, and split it into 2^64 sections. Find which section self
   // falls in.
-  func integerPosition(maxExponent eMax: RawExponent) -> Int64 {
+  func sectionNumber(maxExponent eMax: RawExponent) -> (section: Int64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
     if (e == eMax) && (s == 0) {
-      return (self < 0) ? .min : .max
+      return (self < 0) ? (.min, true) : (.max, false)
     }
     
     precondition(e < eMax, "Exponent exceeds maximum")
     
+    let (n, isLowerBound) = self.unsignedSectionNumber(maxExponent: eMax)
+    var section = Int64(bitPattern: n)
+    
     if self < 0 {
-      let n1 = self.integerPositionPositive(maxExponent: eMax) &- 1
-      let n2 = self.nextUp.integerPositionPositive(maxExponent: eMax)
-      let n = max(Int64(truncatingIfNeeded: n1), Int64(truncatingIfNeeded: n2))
-      return -1 &- n
+      section = isLowerBound ? -section : ~section
     }
     
-    let n = integerPositionPositive(maxExponent: eMax)
-    return Int64(truncatingIfNeeded: n)
+    return (section, isLowerBound)
   }
   
   
   // Take the range with lower bound 0 and upper bound having raw exponent
   // equal to maxExponent+1 and 0 significand, and split it into 2^64 sections.
   // Find which section the absolute value of self falls in.
-  func integerPositionPositive(maxExponent eMax: RawExponent) -> UInt64 {
+  func unsignedSectionNumber(maxExponent eMax: RawExponent) -> (section: UInt64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
     precondition(eMax > 0)
     precondition(e <= eMax, "Exponent exceeds maximum")
     
+    if self == 0 { return (section: 0, isLowerBound: true) }
+    
     let w = UInt64.bitWidth
     let z = eMax &- max(1, e)
     
     if z >= w {
-      if (e != 0) && (z == w) { return 1 }
-      return 0
+      if (e != 0) && (z == w) { return (1, s == 0) }
+      return (0, false)
     }
     
     let bitsNeeded = w &- 1 &- Int(truncatingIfNeeded: z)
     let shift = bitsNeeded &- Self.significandBitCount
     let n: UInt64
+    let isLowerBound: Bool
     
     if shift < 0 {
-      n = UInt64(truncatingIfNeeded: s &>> -shift)
+      let usableBits = s &>> -shift
+      isLowerBound = s == (usableBits &<< -shift)
+      n = UInt64(truncatingIfNeeded: usableBits)
     } else {
       n = UInt64(truncatingIfNeeded: s) &<< shift
+      isLowerBound = true
     }
     
-    if e == 0 { return n }
-    return n | (1 &<< bitsNeeded)
-  }
-  
-  
-  static func bounds(ofSection n: Int64, maxExponent eMax: RawExponent) -> Range<Self> {
-    let a = lowerBound(ofSection: n, maxExponent: eMax)
-    let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
-    if n == .max { return a ..< -b }
-    return a ..< b
-  }
-  
-  
-  static func lowerBound(ofSection n: Int64, maxExponent eMax: RawExponent) -> Self {
-    if (n == 0) || (eMax == 0) { return 0 }
+    if e == 0 { return (n, isLowerBound) }
     
-    let w = UInt64.bitWidth
-    let m = n.magnitude
-    let z = m.leadingZeroBitCount
-    let isNormal = z < eMax
-    
-    let sign: FloatingPointSign = (n < 0) ? .minus : .plus
-    let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
-    
-    let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
-    let availableBitCount = w &- unusedBitCount
-    let shift = significandBitCount &- availableBitCount
-    
-    let sigBits: RawSignificand
-    var needNextDown = false
-    
-    if shift < 0 {
-      var k = m
-      if sign == .minus {
-        k = m &- 1
-        needNextDown = true
-      }
-      sigBits = RawSignificand(truncatingIfNeeded: k &>> -shift)
-    } else {
-      sigBits = RawSignificand(truncatingIfNeeded: m) &<< shift
-    }
-    
-    let s = sigBits & significandBitMask
-    let x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
-    return needNextDown ? x.nextDown : x
+    let section = n | (1 &<< bitsNeeded)
+    return (section, isLowerBound)
   }
   
   
@@ -372,35 +336,57 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // either the entire range (except possibly the greater-magnitude bound) must
   // have the same raw exponent, or one bound must be zero and the other must
   // have raw significand equal to zero.
-  static func uniformRandomInSection<R: RandomNumberGenerator>(_ range: Range<Self>, using generator: inout R) -> Self {
-    if let x = randomInSingleBinade(range, using: &generator) {
+  static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
+    let n = UInt64(bitPattern: (section < 0) ? ~section : section)
+    let range = boundsOfSection(n, maxExponent: eMax)
+    let x = uniformRandomInNonnegativeSectionWithBounds(range, using: &generator)
+    return (section < 0) ? (-x).nextDown : x
+  }
+  
+  
+  static func boundsOfSection(_ n: UInt64, maxExponent eMax: RawExponent) -> Range<Self> {
+    precondition(n != .max)
+    let a = lowerBound(ofSection: n, maxExponent: eMax)
+    let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
+    return a ..< b
+  }
+  
+  
+  static func lowerBound(ofSection n: UInt64, maxExponent eMax: RawExponent) -> Self {
+    if (n == 0) || (eMax == 0) { return 0 }
+    
+    let w = UInt64.bitWidth
+    let z = n.leadingZeroBitCount
+    let isNormal = z < eMax
+    
+    let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
+    let availableBitCount = w &- unusedBitCount
+    let shift = significandBitCount &- availableBitCount
+    
+    let sigBits: RawSignificand
+    
+    if shift < 0 {
+      sigBits = RawSignificand(truncatingIfNeeded: n &>> -shift)
+    } else {
+      sigBits = RawSignificand(truncatingIfNeeded: n) &<< shift
+    }
+    
+    let s = sigBits & significandBitMask
+    let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
+    return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
+  }
+  
+  
+  static func uniformRandomInNonnegativeSectionWithBounds<R: RandomNumberGenerator>(_ range: Range<Self>, using generator: inout R) -> Self {
+    if let x = randomInSinglePositiveBinade(range, using: &generator) {
       return x
     }
     
     let (a, b) = (range.lowerBound, range.upperBound)
+    precondition((a == 0) && (b.significandBitPattern == 0))
     
-    precondition((a == 0) || (b == 0), "Unexpected nonzero bound")
-    precondition(a.significandBitPattern == 0, "Unexpected nonzero significand")
-    precondition(b.significandBitPattern == 0, "Unexpected nonzero significand")
-    
-    let maxExp = max(a.exponentBitPattern, b.exponentBitPattern)
-    let x = randomUpToExponent(maxExp, using: &generator)
-    if a < 0 { return (-x).nextDown }
-    return x
-  }
-  
-  
-  static func randomInSingleBinade<R: RandomNumberGenerator>(_ range: Range<Self>, using generator: inout R) -> Self? {
-    let (a, b) = (range.lowerBound, range.upperBound)
-    if range.isEmpty { return a }
-    
-    if a < 0 {
-      guard let x = randomInSinglePositiveBinade(abs(b) ..< abs(a), using: &generator) else {
-        return nil
-      }
-      return (-x).nextDown
-    }
-    return randomInSinglePositiveBinade(a ..< b, using: &generator)
+    let eMax = max(a.exponentBitPattern, b.exponentBitPattern)
+    return randomUpToExponent(eMax, using: &generator)
   }
   
   
@@ -414,8 +400,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let low = a.significandBitPattern
     let high = b.significandBitPattern
-    
     let n = RawSignificand.random(in: low...high, using: &generator)
+    
     let e = a.exponentBitPattern
     return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: n)
   }
@@ -448,7 +434,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     while true {
       let r = generator.next()
       let z = r.leadingZeroBitCount
-      if n < z { return 0 }
+      if n <= z { return 0 }
       n &-= RawExponent(truncatingIfNeeded: z)
       if r != 0 { return n }
     }
