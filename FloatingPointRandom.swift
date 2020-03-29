@@ -7,6 +7,12 @@
 // representible value. For closed ranges, we extend it into a half-open range
 // bounded by upperBound.nextUp
 
+// Note on terminology: this file uses "binade" pervasively to refer to the
+// set of all floating-point values with the same sign and raw exponent. When
+// the word "binade" appears below, it has that meaning. The implementation
+// cares about values with the same raw exponent, and the word "binade" is
+// repurposed for that definition here.
+
 extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExponent: FixedWidthInteger {
   // MARK: Range
   
@@ -304,7 +310,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if self == 0 { return (section: 0, isLowerBound: true) }
     
     let w = UInt64.bitWidth
-    let z = eMax &- max(1, e)
+    let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
     
     if z >= w {
       if (e != 0) && (z == w) { return (1, s == 0) }
@@ -313,6 +319,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let bitsNeeded = w &- 1 &- Int(truncatingIfNeeded: z)
     let shift = bitsNeeded &- Self.significandBitCount
+    
     let n: UInt64
     let isLowerBound: Bool
     
@@ -332,23 +339,35 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
-  // Get a random number in a single section (as defined above). Specifically,
-  // either the entire range (except possibly the greater-magnitude bound) must
-  // have the same raw exponent, or one bound must be zero and the other must
-  // have raw significand equal to zero.
+  // Get a random number in a single section (as defined above).
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let n = UInt64(bitPattern: (section < 0) ? ~section : section)
-    let range = boundsOfSection(n, maxExponent: eMax)
-    let x = uniformRandomInNonnegativeSectionWithBounds(range, using: &generator)
-    return (section < 0) ? (-x).nextDown : x
-  }
-  
-  
-  static func boundsOfSection(_ n: UInt64, maxExponent eMax: RawExponent) -> Range<Self> {
-    precondition(n != .max)
-    let a = lowerBound(ofSection: n, maxExponent: eMax)
     let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
-    return a ..< b
+    
+    func singleBinadeRandom() -> Self {
+      let a = lowerBound(ofSection: n, maxExponent: eMax)
+      if a == b { return a }
+      
+      let low = a.significandBitPattern
+      let high = b.nextDown.significandBitPattern
+      if (low == high) { return a }
+      
+      let s = RawSignificand.random(in: low...high, using: &generator)
+      let e = a.exponentBitPattern
+      return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
+    }
+    
+    let x: Self
+    
+    if (n == 0) && (b.exponentBitPattern != 0) {
+      // Section 0 starts at 0 and may span multiple binades.
+      x = randomUpToExponent(b.exponentBitPattern, using: &generator)
+    } else {
+      // Every other section fits within a single binade.
+      x = singleBinadeRandom()
+    }
+    
+    return (section < 0) ? (-x).nextDown : x
   }
   
   
@@ -374,48 +393,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let s = sigBits & significandBitMask
     let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
     return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
-  }
-  
-  
-  static func uniformRandomInNonnegativeSectionWithBounds<R: RandomNumberGenerator>(_ range: Range<Self>, using generator: inout R) -> Self {
-    if let x = randomInSinglePositiveBinade(range, using: &generator) {
-      return x
-    }
-    
-    let (a, b) = (range.lowerBound, range.upperBound)
-    precondition((a == 0) && (b.significandBitPattern == 0))
-    
-    let eMax = max(a.exponentBitPattern, b.exponentBitPattern)
-    return randomUpToExponent(eMax, using: &generator)
-  }
-  
-  
-  static func randomInSinglePositiveBinade<R: RandomNumberGenerator>(_ range: Range<Self>, using generator: inout R) -> Self? {
-    guard range.lowerBound >= 0 else { return nil }
-    if range.isEmpty { return range.lowerBound }
-    guard isInSinglePositiveBinade(range) else { return nil }
-    
-    let (a, b) = (range.lowerBound, range.upperBound.nextDown)
-    if a == b { return a }
-    
-    let low = a.significandBitPattern
-    let high = b.significandBitPattern
-    let n = RawSignificand.random(in: low...high, using: &generator)
-    
-    let e = a.exponentBitPattern
-    return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: n)
-  }
-  
-  
-  static func isInSinglePositiveBinade(_ range: Range<Self>) -> Bool {
-    precondition(range.lowerBound >= 0, "Range must be non-negative")
-    if range.isEmpty { return true }
-    
-    let (a, b) = (range.lowerBound, range.upperBound)
-    let (aExp, bExp) = (a.exponentBitPattern, b.exponentBitPattern)
-    
-    if aExp == bExp { return true }
-    return (aExp &+ 1 == bExp) && (b.significandBitPattern == 0)
   }
   
   
