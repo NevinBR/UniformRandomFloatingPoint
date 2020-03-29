@@ -344,6 +344,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let n = UInt64(bitPattern: (section < 0) ? ~section : section)
     let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
     
+    // This must only be called when the section fits in a single raw binade.
     func singleBinadeRandom() -> Self {
       let a = lowerBound(ofSection: n, maxExponent: eMax)
       if a == b { return a }
