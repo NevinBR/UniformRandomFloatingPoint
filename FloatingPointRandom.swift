@@ -343,32 +343,26 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let n = UInt64(bitPattern: (section < 0) ? ~section : section)
     let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
-    
-    // This must only be called when the section fits in a single raw binade.
-    @inline(__always)
-    func singleBinadeRandom() -> Self {
-      let a = lowerBound(ofSection: n, maxExponent: eMax)
-      if a == b { return a }
-      
-      let low = a.significandBitPattern
-      let high = b.nextDown.significandBitPattern
-      if (low == high) { return a }
-      
-      let s = RawSignificand.random(in: low...high, using: &generator)
-      let e = a.exponentBitPattern
-      return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
-    }
-    
     let x: Self
     
+    findingX:
     if (n == 0) && (b.exponentBitPattern != 0) {
       // Section 0 starts at 0 and may span multiple binades.
       x = randomUpToExponent(b.exponentBitPattern, using: &generator)
     } else {
       // Every other section fits within a single binade.
-      x = singleBinadeRandom()
+      let a = lowerBound(ofSection: n, maxExponent: eMax)
+      if a == b { x = a; break findingX }
+
+      let low = a.significandBitPattern
+      let high = b.nextDown.significandBitPattern
+      if (low == high) { x = a; break findingX }
+
+      let s = RawSignificand.random(in: low...high, using: &generator)
+      let e = a.exponentBitPattern
+      x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
-    
+
     return (section < 0) ? (-x).nextDown : x
   }
   
