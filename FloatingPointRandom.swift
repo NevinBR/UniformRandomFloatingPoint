@@ -353,16 +353,16 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       // Every other section fits within a single binade.
       let a = lowerBound(ofSection: n, maxExponent: eMax)
       if a == b { x = a; break findingX }
-
+      
       let low = a.significandBitPattern
       let high = b.nextDown.significandBitPattern
       if (low == high) { x = a; break findingX }
-
+      
       let s = RawSignificand.random(in: low...high, using: &generator)
       let e = a.exponentBitPattern
       x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
-
+    
     return (section < 0) ? (-x).nextDown : x
   }
   
