@@ -101,9 +101,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // same raw exponent, or else it has one bound at 0 and the other with raw
     // significand 0.
     //
-    // In either case, use a helper function to choose a random number
-    // uniformly within that section. If the result is within the original
-    // range, return that value. Otherwise choose a new section and repeat.
+    // In either case, choose a random number uniformly within that section.
+    // If the result is within the original range, return that value.
+    // Otherwise choose a new section and repeat.
     
     let (a, b) = (range.lowerBound, range.upperBound)
     let e = max(abs(a), abs(b)).nextDown.exponentBitPattern &+ 1
@@ -342,53 +342,48 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Get a random number in a single section (as defined above).
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let n = UInt64(bitPattern: (section < 0) ? ~section : section)
-    let b = lowerBound(ofSection: n &+ 1, maxExponent: eMax)
+    let w = UInt64.bitWidth
     let x: Self
     
-    findingX:
-    if (n == 0) && (b.exponentBitPattern != 0) {
-      // Section 0 starts at 0 and may span multiple binades.
-      x = randomUpToExponent(b.exponentBitPattern, using: &generator)
+    if (n == 0) && (eMax >= w) {
+      // Section 0 spanning at least one full raw binade
+      let e = eMax &- RawExponent(truncatingIfNeeded: w &- 1)
+      x = randomUpToExponent(e, using: &generator)
     } else {
-      // Every other section fits within a single binade.
-      let a = lowerBound(ofSection: n, maxExponent: eMax)
-      if a == b { x = a; break findingX }
+      // Every other section fits in a single raw binade
+      let z = n.leadingZeroBitCount
+      let isNormal = z < eMax
+      let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
       
-      let low = a.significandBitPattern
-      let high = b.nextDown.significandBitPattern
-      if (low == high) { x = a; break findingX }
+      let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
+      let availableBitCount = w &- unusedBitCount
+      let shift = significandBitCount &- availableBitCount
       
-      let s = RawSignificand.random(in: low...high, using: &generator)
-      let e = a.exponentBitPattern
+      var s: RawSignificand
+      
+      if shift <= 0 {
+        s = RawSignificand(truncatingIfNeeded: n &>> -shift)
+      } else {
+        s = generator.next()
+        
+        // This condition is always true for types with at least 1 spare
+        // significand bit, including Float, Double, and Float80.
+        //
+        // Perhaps the compiler can eliminate the check during specialization,
+        // or maybe it would be able to if written:
+        //    (spareBitCount != 0) || (shift < RawSignificand.bitWidth)
+        // instead?
+        if shift < RawSignificand.bitWidth {
+          s &= (1 &<< shift) &- 1
+          s |= RawSignificand(truncatingIfNeeded: n) &<< shift
+        }
+      }
+      
+      s &= significandBitMask
       x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
     
     return (section < 0) ? (-x).nextDown : x
-  }
-  
-  
-  static func lowerBound(ofSection n: UInt64, maxExponent eMax: RawExponent) -> Self {
-    if (n == 0) || (eMax == 0) { return 0 }
-    
-    let w = UInt64.bitWidth
-    let z = n.leadingZeroBitCount
-    let isNormal = z < eMax
-    
-    let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
-    let availableBitCount = w &- unusedBitCount
-    let shift = significandBitCount &- availableBitCount
-    
-    let sigBits: RawSignificand
-    
-    if shift < 0 {
-      sigBits = RawSignificand(truncatingIfNeeded: n &>> -shift)
-    } else {
-      sigBits = RawSignificand(truncatingIfNeeded: n) &<< shift
-    }
-    
-    let s = sigBits & significandBitMask
-    let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
-    return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
   }
   
   
