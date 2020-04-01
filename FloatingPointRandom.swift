@@ -88,16 +88,18 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let (a, b) = (range.lowerBound, range.upperBound)
     
-    if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
-      // Fast path for simple ranges
-      if a.exponentBitPattern == 0 {
-        return randomUpToExponent(b.exponentBitPattern, using: &generator)
-      } else if a == -b {
-        let x = randomUpToExponent(b.exponentBitPattern, using: &generator)
-        return Bool.random(using: &generator) ? x : (-x).nextDown
-      } else if b.exponentBitPattern == 0 {
-        let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
-        return (-x).nextDown
+    if R.self != SystemRandomNumberGenerator.self {
+      if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
+        // Fast path for simple ranges
+        if a.exponentBitPattern == 0 {
+          return randomUpToExponent(b.exponentBitPattern, using: &generator)
+        } else if a == -b {
+          let x = randomUpToExponent(b.exponentBitPattern, using: &generator)
+          return Bool.random(using: &generator) ? x : (-x).nextDown
+        } else if b.exponentBitPattern == 0 {
+          let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
+          return (-x).nextDown
+        }
       }
     }
     
