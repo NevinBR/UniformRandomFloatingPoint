@@ -86,16 +86,33 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If range.upperBound == .infinity, treat it as if it were one ulp above
     // .greatestFiniteMagnitude
     
-    // If the size of the range, counted in terms of the smallest ulp in the
-    // range, fits in a RawSignificand, then we can choose a value directly.
-    if let x = smallRangeUniformRandom(in: range, using: &generator) {
-      return x
+    let (a, b) = (range.lowerBound, range.upperBound)
+    
+    if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
+      // Fast path for simple ranges
+      if a.exponentBitPattern == 0 {
+        return randomUpToExponent(b.exponentBitPattern, using: &generator)
+      } else if a == -b {
+        let x = randomUpToExponent(b.exponentBitPattern, using: &generator)
+        return Bool.random(using: &generator) ? x : (-x).nextDown
+      } else if b.exponentBitPattern == 0 {
+        let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
+        return (-x).nextDown
+      }
     }
     
-    // Otherwise, take the smallest range centered at 0 with bounds having raw
-    // significand equal to 0, which contains the target range, and divide it
-    // into 2^64 equal sections. Find which section the bounds of the original
-    // range land in, and choose a section at random between them (inclusive).
+    if significandBitCount > Int64.bitWidth - 3 {
+      // Small ranges that cross raw binade boundaries need to be handled
+      // separately to ensure the `while true` loop below usually succeeds.
+      if let x = smallRangeUniformRandom(in: range, using: &generator) {
+        return x
+      }
+    }
+    
+    // Take the smallest range centered at 0 with bounds having raw significand
+    // equal to 0, which contains the target range, and divide it into 2^64
+    // equal sections. Find which section the bounds of the original range land
+    // in, and choose a section at random between them (inclusive).
     //
     // That section either has all values (except possibly one bound) with the
     // same raw exponent, or else it has one bound at 0 and the other with raw
@@ -105,10 +122,10 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If the result is within the original range, return that value.
     // Otherwise choose a new section and repeat.
     
-    let (a, b) = (range.lowerBound, range.upperBound)
-    let e = max(abs(a), abs(b)).nextDown.exponentBitPattern &+ 1
+    let m = maximumMagnitude(a, b)
+    let mExp = m.exponentBitPattern
+    let e = (m.significandBitPattern == 0) ? mExp : mExp &+ 1
     
-    // Find section numbers
     let (low, _) = a.sectionNumber(maxExponent: e)
     let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
     let high = isLowerBound ? h &- 1 : h
@@ -123,152 +140,83 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // MARK: Small range
   
-  // Small ranges come in many shapes. First, consider how many spare
-  // bits are in the RawSignificand type. That puts an upper bound on the
-  // number of full binades that can be handled at once.
+  // If the range spans 0 or 1 raw binades and its bounds are close enough
+  // together, then the distance between them can be counted in terms of the
+  // smallest ulp in the range.
   //
-  // If the range crosses 0, then distances are counted in terms of the ulp of
-  // 0, which is .leastNonzeroMagnitude. In this case, the raw exponents must
-  // be less than the number of spare bits.
+  // For types with spare bits in the significand, this could be done for
+  // ranges that span a larger number of raw binades, but there is little
+  // benefit to doing so.
   //
-  // If the range does not cross zero, then the distances are counted in terms
-  // of the ulp of the smaller-magnitude bound, and the difference in raw
-  // exponents must be less than the number of spare bits. One exception is
-  // when the lesser bound is subnormal, in which case the difference in raw
-  // exponents can be equal to the number of spare bits.
-  //
-  // If there are no spare bits at all, meaning that all the bits of the
-  // RawSignificand type are utilized, then the standard approach breaks down
-  // outside of a single binade.
-  //
-  // However, if the bounds are in adjacent binades and the significands are
-  // close enough to the boundary of those binades, then we can still measure
-  // the distance between them in terms of the smaller ulp.
+  // The purpose here is to ensure that the large range path is only taken
+  // when there is a low probability of needing multiple attempts. Currently,
+  // that probability is less than 1 in 2^60 in the worst case.
   static func smallRangeUniformRandom<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self? {
     let (a, b) = (range.lowerBound, range.upperBound)
-    let (aMag, bMag) = (a.magnitude, b.magnitude)
-    let (mMin, mMax) = (aMag < bMag) ? (aMag, bMag) : (bMag, aMag)
-    let (eMin, eMax) = (mMin.exponentBitPattern, mMax.nextDown.exponentBitPattern)
-    let (sMin, sMax) = (mMin.significandBitPattern, mMax.nextDown.significandBitPattern)
+    let aExp = a.exponentBitPattern
+    let bExp = b.exponentBitPattern
     
-    let isSameSign = (a.sign == b.sign) || (mMin == 0)
-    
-    if isSameSign {
+    if a.sign == b.sign {
+      let sign = a.sign
+      let eSpan = (sign == .plus) ? (bExp &- aExp) : (aExp &- bExp)
+      if eSpan > 1 { return nil }
+      
+      let aSig = a.significandBitPattern
+      let bSig = b.significandBitPattern
+      let (low, high) = (sign == .plus) ? (aSig, bSig) : (bSig, aSig)
       let x: Self
       
-      if eMax == eMin {
-        // Single binade
-        let n = RawSignificand.random(in: sMin...sMax, using: &generator)
-        x = Self(sign: .plus, exponentBitPattern: eMin, significandBitPattern: n)
-        
-      } else if (eMax &- eMin < spareBitCount) || (eMax == spareBitCount)  {
-        // One-sided small range
-        let low = mMin.positionInSmallPositiveRange(minExponent: eMin)
-        let high = mMax.positionInSmallPositiveRange(minExponent: eMin) &- 1
-        let r = RawSignificand.random(in: low...high, using: &generator)
-        x = positiveValueAtPosition(r, minExponent: eMin)
-        
-      } else if (eMax == 1) && (sMax < sMin) {
-        // Adjacent binades (one subnormal), no spare bits
-        let high = sMax &- sMin
-        let r = RawSignificand.random(in: 0...high, using: &generator)
-        let n = sMin &+ r
-        let e = (n < sMin) ? eMax : eMin
-        x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: n)
-        
-      } else if (eMax == eMin &+ 1) && (sMax < sMin &>> 1) {
-        // Adjacent binades (normal), 0 or 1 spare bits
-        let high = (sMax &<< 1) &+ 1 &- sMin
-        let r = RawSignificand.random(in: 0...high, using: &generator)
-        let n = sMin &+ r
-        let e = (n < sMin) ? eMax : eMin
-        let s = (n < sMin) ? n &>> 1 : n
-        x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
+      if eSpan == 0 {
+        // Single raw binade
+        let s = RawSignificand.random(in: low..<high, using: &generator)
+        x = Self(sign: sign, exponentBitPattern: aExp, significandBitPattern: s)
         
       } else {
-        return nil
+        // Adjacent raw binades
+        let eBase = (sign == .plus) ? aExp : bExp
+        let isHigh: Bool
+        let s: RawSignificand
+        
+        if (eBase == 0) && (high <= low) {
+          // One subnormal
+          let span = high &+ (significandBitMask &- low)
+          let r = RawSignificand.random(in: 0...span, using: &generator)
+          isHigh = r < high
+          s = isHigh ? r : low &+ (r &- high)
+          
+        } else if high <= (low &>> 1) {
+          // Both normal
+          let h2 = high &<< 1
+          let span = h2 &+ (significandBitMask &- low)
+          let r = RawSignificand.random(in: 0...span, using: &generator)
+          isHigh = r < h2
+          s = isHigh ? (r &>> 1) : low &+ (r &- h2)
+          
+        } else {
+          // Large range
+          return nil
+        }
+        
+        let e = isHigh ? eBase &+ 1 : eBase
+        x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
       }
       
-      return (a < 0) ? (-x).nextDown : x
+      return (sign == .plus) ? x : x.nextDown
       
-    } else if eMax < spareBitCount {
-      // Two-sided small range
-      let low = a.positionInSmallRange()
-      let high = b.positionInSmallRange() &- 1
-      let r = RawSignificand.random(in: low...high, using: &generator)
-      return valueAtPosition(r)
+    } else if (aExp == 0) && (bExp == 0) {
+      // Subnormal opposite signs
+      let bSig = b.significandBitPattern
+      let span = a.significandBitPattern &+ bSig
+      if span < bSig { return nil }
       
-    } else if (eMax == 0) && (sMin &+ sMax >= sMax) {
-      // Two-sided subnormals, no spare bits
-      let high = sMin &+ sMax
-      let r = RawSignificand.random(in: 0...high, using: &generator)
-      let threshold = b.significandBitPattern &- 1
-      let sign: FloatingPointSign = (r > threshold) ? .minus : .plus
-      let n = (sign == .plus) ? r : (r &- threshold)
-      return Self(sign: sign, exponentBitPattern: 0, significandBitPattern: n)
+      let r = RawSignificand.random(in: 0 ..< span, using: &generator)
+      let sign: FloatingPointSign = (r < bSig) ? .plus : .minus
+      let s = (r < bSig) ? r : r &- bSig &+ 1
+      return Self(sign: sign, exponentBitPattern: 0, significandBitPattern: s)
       
     } else {
+      // Large range
       return nil
-    }
-  }
-  
-  
-  // Two-sided small ranges (ie. crossing 0), counting distance in terms of
-  // the ulp of 0 (aka. leastNonzeroMagnitude).
-  func positionInSmallRange() -> RawSignificand {
-    let highBit = Self.significandHighBit
-    let n = self.positionInSmallPositiveRange(minExponent: 0)
-    precondition(n <= highBit)
-    return (self < 0) ? (highBit &- n) : (n ^ highBit)
-  }
-  
-  
-  // Non-negative small ranges, counting distance in terms of the ulp of the
-  // lower bound.
-  func positionInSmallPositiveRange(minExponent: RawExponent) -> RawSignificand {
-    precondition(exponentBitPattern >= minExponent)
-    if exponentBitPattern == 0 { return significandBitPattern }
-    let shift = exponentBitPattern &- max(1, minExponent)
-    
-    // The just-beyond-the-end position wraps around to zero.
-    if (shift == Self.spareBitCount) && (significandBitPattern == 0) {
-      return 0
-    }
-    
-    precondition(Self.spareBitCount > shift)
-    return (Self.uncheckedImplicitBit | significandBitPattern) &<< shift
-  }
-  
-  
-  // Counting in terms of the ulp of 0 (aka. leastNonzeroMagnitude)
-  static func valueAtPosition(_ p: RawSignificand) -> Self {
-    let highBit = significandHighBit
-    let isNegative = (p & highBit) == 0
-    
-    if isNegative {
-      let n = highBit &- 1 &- p
-      let r = positiveValueAtPosition(n, minExponent: 0)
-      return (-r).nextDown
-    } else {
-      let n = p ^ highBit
-      return positiveValueAtPosition(n, minExponent: 0)
-    }
-  }
-  
-  
-  // Counting in terms of the ulp of the binade with exponent minExponent.
-  // The result must have raw exponent of minExponent or greater.
-  static func positiveValueAtPosition(_ p: RawSignificand, minExponent: RawExponent) -> Self {
-    let z = p.leadingZeroBitCount
-    
-    if z < spareBitCount {
-      let shift = spareBitCount &- 1 &- z
-      let s = (p &>> shift) & significandBitMask
-      let e = RawExponent(truncatingIfNeeded: shift) &+ max(1, minExponent)
-      return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
-    } else {
-      precondition(minExponent == 0)
-      return Self(sign: .plus, exponentBitPattern: 0, significandBitPattern: p)
     }
   }
   
