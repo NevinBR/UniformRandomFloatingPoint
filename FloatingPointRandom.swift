@@ -1,4 +1,4 @@
-// Author: Nevin Brackett-Rozinsky
+// Author: Nevin Brackett-Rozinsky, with help from Jens Persson (@jens-bc)
 //
 // This is a proof-of-concept implementation to generate random floating-point
 // numbers, with probability proportional to the distance between each
@@ -88,18 +88,15 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let (a, b) = (range.lowerBound, range.upperBound)
     
-    if R.self != SystemRandomNumberGenerator.self {
-      if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
-        // Fast path for simple ranges
-        if a.exponentBitPattern == 0 {
-          return randomUpToExponent(b.exponentBitPattern, using: &generator)
-        } else if a == -b {
-          let x = randomUpToExponent(b.exponentBitPattern, using: &generator)
-          return Bool.random(using: &generator) ? x : (-x).nextDown
-        } else if b.exponentBitPattern == 0 {
-          let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
-          return (-x).nextDown
-        }
+    if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
+      // Fast path for simple ranges
+      if a.exponentBitPattern == 0 {
+        return randomUpToExponent(b.exponentBitPattern, using: &generator)
+      } else if a == -b {
+        return randomUpToExponent(b.exponentBitPattern, allowNegative: true, using: &generator)
+      } else if b.exponentBitPattern == 0 {
+        let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
+        return (-x).nextDown
       }
     }
     
@@ -262,7 +259,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let w = UInt64.bitWidth
     let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
     
-    if z >= w {
+    if z >= w {                 // Heterogeneous compare (common)
       if (e != 0) && (z == w) { return (1, s == 0) }
       return (0, false)
     }
@@ -295,14 +292,14 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let w = UInt64.bitWidth
     let x: Self
     
-    if (n == 0) && (eMax >= w) {
+    if (n == 0) && (eMax >= w) {            // Heterogeneous compare (rare)
       // Section 0 spanning at least one full raw binade
       let e = eMax &- RawExponent(truncatingIfNeeded: w &- 1)
       x = randomUpToExponent(e, using: &generator)
     } else {
       // Every other section fits in a single raw binade
       let z = n.leadingZeroBitCount
-      let isNormal = z < eMax
+      let isNormal = z < eMax               // Heterogeneous compare (common)
       let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
       
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
@@ -337,30 +334,72 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
-  static func randomUpToExponent<R: RandomNumberGenerator>(_ maxExp: RawExponent, using generator: inout R) -> Self {
+  // MARK: Fast path
+  
+  @inline(__always)
+  static func randomUpToExponent<R: RandomNumberGenerator>(_ maxExp: RawExponent, allowNegative: Bool = false, using generator: inout R) -> Self {
     if maxExp == 0 { return 0 }
-    let e = randomExponent(upperBound: maxExp, using: &generator)
-    let n = randomSignificand(using: &generator)
-    return Self(sign: .plus, exponentBitPattern: e, significandBitPattern: n)
-  }
-  
-  
-  static func randomExponent<R: RandomNumberGenerator>(upperBound: RawExponent, using generator: inout R) -> RawExponent {
-    if upperBound <= 1 { return 0 }
-    var n = upperBound &- 1
     
-    while true {
-      let r = generator.next()
-      let z = r.leadingZeroBitCount
-      if n <= z { return 0 }
-      n &-= RawExponent(truncatingIfNeeded: z)
-      if r != 0 { return n }
+    let e: RawExponent
+    let bits: UInt64
+    var bitCount: Int
+    
+    if (exponentBitCount < Int.bitWidth) || (maxExp._binaryLogarithm() < Int.bitWidth &- 1) {
+      // maxExp fits in an Int, so use the specialized version
+      var eInt = Int(truncatingIfNeeded: maxExp)
+      (eInt, bits, bitCount) = randomExponent(upperBound: eInt, using: &generator)
+      e = RawExponent(truncatingIfNeeded: eInt)
+    } else {
+      (e, bits, bitCount) = randomExponent(upperBound: maxExp, using: &generator)
     }
+    
+    let shortOnBits = bitCount < significandBitCount
+    let s: RawSignificand
+    
+    if shortOnBits {
+      s = generator.next() & significandBitMask
+    } else {
+      s = RawSignificand(truncatingIfNeeded: bits) & significandBitMask
+      bitCount &-= significandBitCount
+    }
+    
+    let x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
+    if !allowNegative { return x }
+    
+    let isNegative: Bool
+    
+    if bitCount == 0 {
+      isNegative = Bool.random(using: &generator)
+    } else {
+      let nextBit: UInt64 = shortOnBits ? 1 : 1 &<< significandBitCount
+      isNegative = (bits & nextBit) == 0
+    }
+    return isNegative ? (-x).nextDown : x
   }
   
-  static func randomSignificand<R: RandomNumberGenerator>(using generator: inout R) -> RawSignificand {
-    return generator.next() & significandBitMask
+  
+  @inline(__always)
+  @_specialize(kind: partial, where T == Int)
+  static func randomExponent<R: RandomNumberGenerator, T: FixedWidthInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
+    if upperBound <= 1 { return (0, 0, 0) }
+    
+    var e = upperBound &- 1
+    var bits: UInt64 = 0
+    var z: Int
+    
+    repeat {
+      bits = generator.next()
+      z = bits.leadingZeroBitCount
+      if e <= z { e = 0; break }      // Heterogeneous compare (unless T == Int)
+      e &-= T(truncatingIfNeeded: z)
+    } while bits == 0
+    
+    let bitCount = (bits == 0) ? 0 : (UInt64.bitWidth &- 1) &- z
+    return (e, bits, bitCount)
   }
+  
+  
+  // MARK: Helper methods
   
   static var significandBitMask: RawSignificand {
     return (spareBitCount == 0) ? .max : (uncheckedImplicitBit &- 1)
