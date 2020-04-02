@@ -384,7 +384,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if upperBound <= 1 { return (0, 0, 0) }
     
     var e = upperBound &- 1
-    var bits: UInt64 = 0
+    var bits: UInt64
     var z: Int
     
     repeat {
