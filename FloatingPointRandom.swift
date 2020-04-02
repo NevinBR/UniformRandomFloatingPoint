@@ -315,12 +315,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
         
         // This condition is always true for types with at least 1 spare
         // significand bit, including Float, Double, and Float80.
-        //
-        // Perhaps the compiler can eliminate the check during specialization,
-        // or maybe it would be able to if written:
-        //    (spareBitCount != 0) || (shift < RawSignificand.bitWidth)
-        // instead?
-        if shift < RawSignificand.bitWidth {
+        // Note that `shift <= significandBitCount` is always true.
+        if (spareBitCount != 0) || (shift < RawSignificand.bitWidth) {
           s &= (1 &<< shift) &- 1
           s |= RawSignificand(truncatingIfNeeded: n) &<< shift
         }
@@ -341,7 +337,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if maxExp == 0 { return 0 }
     
     let e: RawExponent
-    let bits: UInt64
+    var bits: UInt64
     var bitCount: Int
     
     if (exponentBitCount < Int.bitWidth) || (maxExp._binaryLogarithm() < Int.bitWidth &- 1) {
@@ -357,7 +353,16 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let s: RawSignificand
     
     if shortOnBits {
-      s = generator.next() & significandBitMask
+      let r = generator.next() as RawSignificand
+      
+      if allowNegative && (bitCount == 0) && (spareBitCount != 0) {
+        // Save one bit for later
+        bits = (r & uncheckedImplicitBit) == 0 ? 0 : 1
+        bitCount = 1
+      }
+      
+      s = r & significandBitMask
+
     } else {
       s = RawSignificand(truncatingIfNeeded: bits) & significandBitMask
       bitCount &-= significandBitCount
@@ -401,18 +406,22 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // MARK: Helper methods
   
+  @inline(__always)
   static var significandBitMask: RawSignificand {
     return (spareBitCount == 0) ? .max : (uncheckedImplicitBit &- 1)
   }
   
+  @inline(__always)
   static var spareBitCount: Int {
     return RawSignificand.bitWidth &- significandBitCount
   }
   
+  @inline(__always)
   static var uncheckedImplicitBit: RawSignificand {
     return 1 &<< significandBitCount
   }
   
+  @inline(__always)
   static var significandHighBit: RawSignificand {
     return (1 as RawSignificand) &<< (RawSignificand.bitWidth &- 1)
   }
