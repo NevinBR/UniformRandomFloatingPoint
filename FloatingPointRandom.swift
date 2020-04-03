@@ -86,28 +86,47 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If range.upperBound == .infinity, treat it as if it were one ulp above
     // .greatestFiniteMagnitude
     
+    
+    // Fast path
+    //
+    // Simple ranges bounded by the start of a raw binade and either 0 or the
+    // negative of the first bound. We expect these ranges will be the most
+    // common in practice, as they include 0..<1 and -1..<1.
+    
     let (a, b) = (range.lowerBound, range.upperBound)
     
     if (a.significandBitPattern == 0) && (b.significandBitPattern == 0) {
-      // Fast path for simple ranges
-      if a.exponentBitPattern == 0 {
-        return randomUpToExponent(b.exponentBitPattern, using: &generator)
+      let (aExp, bExp) = (a.exponentBitPattern, b.exponentBitPattern)
+      
+      if aExp == 0 {
+        return randomUpToExponent(bExp, using: &generator)
       } else if a == -b {
-        return randomUpToExponent(b.exponentBitPattern, allowNegative: true, using: &generator)
-      } else if b.exponentBitPattern == 0 {
-        let x = randomUpToExponent(a.exponentBitPattern, using: &generator)
-        return (-x).nextDown
+        return randomUpToExponent(bExp, allowNegative: true, using: &generator)
+      } else if bExp == 0 {
+        return -randomUpToExponent(aExp, using: &generator).nextUp
       }
     }
     
+    
+    // Small range
+    //
+    // Ranges that cross one raw binade boundary need to be handled separately
+    // to ensure the `while true` loop in the general case usually succeeds.
+    //
+    // The number 3 is subtracted because the 2nd-largest raw binade spans
+    // 1/8 of the extended range (or more for subnormals). If the significand
+    // is small enough that every value in that binade falls in a different
+    // section, then we do not need to handle small ranges separately.
+    
     if significandBitCount > Int64.bitWidth - 3 {
-      // Small ranges that cross raw binade boundaries need to be handled
-      // separately to ensure the `while true` loop below usually succeeds.
       if let x = smallRangeUniformRandom(in: range, using: &generator) {
         return x
       }
     }
     
+    
+    // General case
+    //
     // Take the smallest range centered at 0 with bounds having raw significand
     // equal to 0, which contains the target range, and divide it into 2^64
     // equal sections. Find which section the bounds of the original range land
@@ -121,17 +140,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If the result is within the original range, return that value.
     // Otherwise choose a new section and repeat.
     
-    let m = maximumMagnitude(a, b)
-    let mExp = m.exponentBitPattern
-    let e = (m.significandBitPattern == 0) ? mExp : mExp &+ 1
-    
-    let (low, _) = a.sectionNumber(maxExponent: e)
-    let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
-    let high = isLowerBound ? h &- 1 : h
+    let (sections, e) = sectionsAndExponent(for: range, using: &generator)
     
     while true {
-      let s = Int64.random(in: low...high, using: &generator)
-      let x = uniformRandomInSection(s, maxExponent: e, using: &generator)
+      let n = Int64.random(in: sections, using: &generator)
+      let x = uniformRandomInSection(n, maxExponent: e, using: &generator)
       if range.contains(x) { return x }
     }
   }
@@ -221,6 +234,22 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   
   // MARK: Large range
+  
+  // Convert a range of Self into a range of Int64 section numbers and the
+  // corresponding maximum exponent.
+  @inline(__always)
+  static func sectionsAndExponent<R: RandomNumberGenerator>(for range: Range<Self>, using generator: inout R) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
+    let (a, b) = (range.lowerBound, range.upperBound)
+    let m = maximumMagnitude(a, b)
+    let mExp = m.exponentBitPattern
+    let e = (m.significandBitPattern == 0) ? mExp : mExp &+ 1
+    
+    let (low, _) = a.sectionNumber(maxExponent: e)
+    let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
+    let high = isLowerBound ? h &- 1 : h
+    return (low...high, e)
+  }
+  
   
   // Take the range with bounds having raw exponent equal to maxExponent and
   // 0 significand, and split it into 2^64 sections. Find which section self
@@ -326,7 +355,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
     
-    return (section < 0) ? (-x).nextDown : x
+    return (section < 0) ? -x.nextUp : x
   }
   
   
@@ -355,12 +384,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     if shortOnBits {
       let r = generator.next() as RawSignificand
       
-      if allowNegative && (bitCount == 0) && (spareBitCount != 0) {
-        // Save one bit for later
+      if spareBitCount != 0 {
+        // Save one bit for later. Technically we only need to do this if
+        // allowNegative is true and bitCount is 0.
         bits = (r & uncheckedImplicitBit) == 0 ? 0 : 1
         bitCount = 1
       }
-      
       s = r & significandBitMask
 
     } else {
@@ -379,10 +408,13 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       let nextBit: UInt64 = shortOnBits ? 1 : 1 &<< significandBitCount
       isNegative = (bits & nextBit) == 0
     }
-    return isNegative ? (-x).nextDown : x
+    return isNegative ? -x.nextUp : x
   }
   
   
+  // This function is generic over T because it is faster when specialized for
+  // Int. The alternative was to have two copies, one for Int alone and the
+  // other for RawExponent. Making it generic avoids that duplication.
   @inline(__always)
   @_specialize(kind: partial, where T == Int)
   static func randomExponent<R: RandomNumberGenerator, T: FixedWidthInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
