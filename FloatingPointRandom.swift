@@ -246,6 +246,10 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // `Int64.random(in:)` call will need to generate more than one value.
     // For example, in cases like -1...1 the range would otherwise span just
     // over half of all sections.
+    //
+    // If and when the system random number generator because fast enough that
+    // this optimization can be removed, it will still be necessary to add 1
+    // to m.exponentBitPattern, unless m.significandBitPattern == 0.
     let e: RawExponent
     if exponentBitCount > 2 {
       let d = min(5, infinity.exponentBitPattern &- m.exponentBitPattern)
