@@ -162,7 +162,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   //
   // The purpose here is to ensure that the large range path is only taken
   // when there is a low probability of needing multiple attempts. Currently,
-  // that probability is less than 1 in 2^60 in the worst case.
+  // that probability is less than 1 in 2^55 in the worst case.
   static func smallRangeUniformRandom<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self? {
     let (a, b) = (range.lowerBound, range.upperBound)
     let aExp = a.exponentBitPattern
