@@ -241,8 +241,18 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   static func sectionsAndExponent(for range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
     let m = maximumMagnitude(a, b)
-    let mExp = m.exponentBitPattern
-    let e = (m.significandBitPattern == 0) ? mExp : mExp &+ 1
+    
+    // We increase the exponent, if possible, to reduce the chance that the
+    // `Int64.random(in:)` call will need to generate more than one value.
+    // For example, in cases like -1...1 the range would otherwise span just
+    // over half of all sections.
+    let e: RawExponent
+    if exponentBitCount > 2 {
+      let d = min(5, infinity.exponentBitPattern &- m.exponentBitPattern)
+      e = m.exponentBitPattern &+ d
+    } else {
+      e = infinity.exponentBitPattern
+    }
     
     let (low, _) = a.sectionNumber(maxExponent: e)
     let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
@@ -345,7 +355,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
         // This condition is always true for types with at least 1 spare
         // significand bit, including Float, Double, and Float80.
         // Note that `shift <= significandBitCount` is always true.
-        if (spareBitCount != 0) || (shift < RawSignificand.bitWidth) {
+        if (spareBitCount != 0) || (shift < significandBitCount) {
           s &= (1 &<< shift) &- 1
           s |= RawSignificand(truncatingIfNeeded: n) &<< shift
         }
