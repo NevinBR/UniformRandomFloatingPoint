@@ -247,7 +247,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // For example, in cases like -1...1 the range would otherwise span just
     // over half of all sections.
     //
-    // If and when the system random number generator because fast enough that
+    // If and when the system random number generator becomes fast enough that
     // this optimization can be removed, it will still be necessary to add 1
     // to m.exponentBitPattern, unless m.significandBitPattern == 0.
     let e: RawExponent
