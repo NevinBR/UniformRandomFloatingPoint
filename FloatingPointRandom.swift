@@ -140,7 +140,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If the result is within the original range, return that value.
     // Otherwise choose a new section and repeat.
     
-    let (sections, e) = sectionsAndExponent(for: range)
+    let (sections, e) = sectionsAndExponent(range)
     
     while true {
       let n = Int64.random(in: sections, using: &generator)
@@ -238,7 +238,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Convert a range of Self into a range of Int64 section numbers and the
   // corresponding maximum exponent.
   @inline(__always)
-  static func sectionsAndExponent(for range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
+  static func sectionsAndExponent(_ range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
     let m = maximumMagnitude(a, b)
     
