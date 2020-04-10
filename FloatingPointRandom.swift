@@ -51,35 +51,23 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // MARK: Implementation
   
-  // The base case is small ranges, where the distance between the bounds, when
-  // counted in terms of the smallest ulp in the range, fits in an instance of
-  // the RawSignificand type without overflowing. In that case, an integer can
-  // be chosen in the appropriate range, and the result generated directly.
+  // Our goal is to produce a result equivalent to choosing a real number
+  // uniformly at random within the given range then rounding down to the
+  // nearest representable floating-point value.
   //
-  // In the general case of a large range where that is not possible, the
-  // strategy is as follows:
+  // The general strategy is to expand the range so its bounds are equal and
+  // opposite powers of 2. Split that new range into 2^64 equal sections, and
+  // note that each section either fits in a single raw binade, or it has 0 as
+  // one bound and a power of 2 as the other.
   //
-  // Expand the range so its bounds are equal and opposite powers of 2, ie.
-  // -2^n ..< 2^n, considered as a range of real numbers. Split that range into
-  // 2^64 equal sections, and find which sections the minimum and maximum values
-  // of the original range land in, counting sections from least to greatest.
+  // Find which sections the bounds of the original range land in, and choose
+  // a section at random which overlaps the original range. Finally, pick a
+  // representable value at random from that section. If it is in the original
+  // range we are done, otherwise try again.
   //
-  // Choose a section between them (inclusive). The bounds of that section are
-  // either in the same binade, or adjacent binades with one bound having
-  // significand 0, or one bound is exactly 0 and the other bound has
-  // significand 0.
-  //
-  // In the first two cases, a random significand can be chosen directly. In
-  // the last case, a simple algorithm is used to choose a random value up to
-  // a binade.
-  //
-  // Having selected a value within the section, if it is also in the original
-  // range then we are done. Otherwise, repeat the process of choosing a
-  // section and a value within it.
-  //
-  // The result is a value equivalent to picking a real number uniformly at
-  // random within the original range, then rounding down to the nearest
-  // representable floating-point number.
+  // To reduce the probability of landing outside the original range, we handle
+  // very small ranges separately, where the span can be counted in terms of
+  // the smallest ulp in the range without overflowing.
   static func uniformRandomRoundedDown<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self {
     precondition(!range.isEmpty)
     precondition(range.lowerBound.isFinite)
@@ -110,15 +98,14 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     // Small range
     //
-    // Ranges that cross one raw binade boundary need to be handled separately
-    // to ensure the `while true` loop in the general case usually succeeds.
+    // Ranges that cross zero or one raw binade boundaries are handled here to
+    // ensure the `while true` loop in the general case usually succeeds.
     //
-    // The number 3 is subtracted because the 2nd-largest raw binade spans
-    // 1/8 of the extended range (or more for subnormals). If the significand
-    // is small enough that every value in that binade falls in a different
-    // section, then we do not need to handle small ranges separately.
+    // The number 7 is subtracted for implementation reasons, to make sure
+    // every representable number in the second-largest raw binade of the range
+    // falls in a separate section.
     
-    if significandBitCount > Int64.bitWidth - 3 {
+    if significandBitCount > Int64.bitWidth - 7 {
       if let x = smallRangeUniformRandom(in: range, using: &generator) {
         return x
       }
@@ -127,18 +114,13 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     // General case
     //
-    // Take the smallest range centered at 0 with bounds having raw significand
-    // equal to 0, which contains the target range, and divide it into 2^64
-    // equal sections. Find which section the bounds of the original range land
-    // in, and choose a section at random between them (inclusive).
+    // Take a range centered at 0 with bounds having raw significand 0, which
+    // contains the target range, and divide it into 2^64 equal sections. Find
+    // which section the bounds of the original range land in, and choose a
+    // section at random between them (inclusive).
     //
-    // That section either has all values (except possibly one bound) with the
-    // same raw exponent, or else it has one bound at 0 and the other with raw
-    // significand 0.
-    //
-    // In either case, choose a random number uniformly within that section.
-    // If the result is within the original range, return that value.
-    // Otherwise choose a new section and repeat.
+    // Pick a random number uniformly within that section. It it is within the
+    // original range return it, otherwise repeat.
     
     let (sections, e) = sectionsAndExponent(range)
     
@@ -162,7 +144,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   //
   // The purpose here is to ensure that the large range path is only taken
   // when there is a low probability of needing multiple attempts. Currently,
-  // that probability is less than 1 in 2^55 in the worst case.
+  // that probability is less than 1 in 2^56 in the worst case.
   static func smallRangeUniformRandom<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self? {
     let (a, b) = (range.lowerBound, range.upperBound)
     let aExp = a.exponentBitPattern
@@ -240,7 +222,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   @inline(__always)
   static func sectionsAndExponent(_ range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
-    let m = maximumMagnitude(a, b)
     
     // We increase the exponent, if possible, to reduce the chance that the
     // `Int64.random(in:)` call will need to generate more than one value.
@@ -250,8 +231,19 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // If and when the system random number generator becomes fast enough that
     // this optimization can be removed, it will still be necessary to add 1
     // to m.exponentBitPattern, unless m.significandBitPattern == 0.
+    //
+    // We choose to increase by 5 in order to optimize for Double. Without the
+    // increase, there are 2^62 section numbers for the largest raw binade in
+    // the range, and Double has 52 significand bits. That leave 10 bits of
+    // slack, and splitting them equally between the exponent and significand
+    // minimizes the odds of needing to generate a second random number.
+    //
+    // Note that Float has 39 bits of slack, so it almost never needs to
+    // generate a separate significand, while Float80 always does.
     let e: RawExponent
+    
     if exponentBitCount > 2 {
+      let m = maximumMagnitude(a, b)
       let d = min(5, infinity.exponentBitPattern &- m.exponentBitPattern)
       e = m.exponentBitPattern &+ d
     } else {
@@ -329,7 +321,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
-  // Get a random number in a single section (as defined above).
+  // Get a random number in a single section.
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let n = UInt64(bitPattern: (section < 0) ? ~section : section)
     let w = UInt64.bitWidth
