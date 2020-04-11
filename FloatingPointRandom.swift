@@ -240,22 +240,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Take the range with bounds having raw exponent equal to maxExponent and
   // 0 significand, and split it into 2^60 sections. Find which section self
   // falls in.
+  //
+  // The section number for a non-negative value is equal to its significand
+  // (including implicit bit), shifted so there are (eMax - e + sectionScale)
+  // zeros before the implicit bit. Negative numbers have their section offset
+  // by 1, except at the boundary between sections.
   func sectionNumber(maxExponent eMax: RawExponent) -> (section: Int64, isLowerBound: Bool) {
-    let (n, isLowerBound) = self.unsignedSectionNumber(maxExponent: eMax)
-    var section = Int64(bitPattern: n)
-    
-    if self < 0 {
-      section = isLowerBound ? -section : ~section
-    }
-    
-    return (section, isLowerBound)
-  }
-  
-  
-  // Take the range with lower bound 0 and upper bound having raw exponent
-  // equal to maxExponent+1 and 0 significand, and split it into 2^60 sections.
-  // Find which section the absolute value of self falls in.
-  func unsignedSectionNumber(maxExponent eMax: RawExponent) -> (section: UInt64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
     precondition(eMax > 0)
@@ -263,33 +253,39 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     if self == 0 { return (section: 0, isLowerBound: true) }
     
-    let w = UInt64.bitWidth &- 1 &- Self.sectionScale
-    let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
-    
-    if z >= w {                 // Heterogeneous compare (common)
-      if (e != 0) && (z == w) { return (1, s == 0) }
-      return (0, false)
-    }
-    
-    let bitsNeeded = w &- Int(truncatingIfNeeded: z)
-    let shift = bitsNeeded &- Self.significandBitCount
-    
-    let n: UInt64
+    var n: UInt64
     let isLowerBound: Bool
     
-    if shift < 0 {
-      let usableBits = s &>> -shift
-      isLowerBound = s == (usableBits &<< -shift)
-      n = UInt64(truncatingIfNeeded: usableBits)
+    let w = UInt64.bitWidth &- Self.sectionScale &- 1
+    let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
+    
+    if z < w {
+      // We will need (w - z) significand bits.
+      let bitsNeeded = w &- Int(truncatingIfNeeded: z)
+      let shift = bitsNeeded &- Self.significandBitCount
+      
+      if shift < 0 {
+        let usableBits = s &>> -shift
+        isLowerBound = s == (usableBits &<< -shift)
+        n = UInt64(truncatingIfNeeded: usableBits)
+      } else {
+        n = UInt64(truncatingIfNeeded: s) &<< shift
+        isLowerBound = true
+      }
+      
+      if e != 0 {
+        n |= (1 &<< bitsNeeded)
+      }
+    } else if (z == w) && (e != 0) {
+      (n, isLowerBound) = (1, s == 0)
     } else {
-      n = UInt64(truncatingIfNeeded: s) &<< shift
-      isLowerBound = true
+      (n, isLowerBound) = (0, false)
     }
     
-    if e == 0 { return (n, isLowerBound) }
-    
-    let section = n | (1 &<< bitsNeeded)
-    return (section, isLowerBound)
+    if self < 0 {
+      n = isLowerBound ? (0 &- n) : ~n
+    }
+    return (Int64(bitPattern: n), isLowerBound)
   }
   
   
@@ -300,7 +296,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let w = UInt64.bitWidth &- sectionScale
     let x: Self
     
-    if (n == 0) && (eMax >= w) {            // Heterogeneous compare (rare)
+    if (n == 0) && (eMax >= w) {
       // Section 0 spanning at least one full raw binade
       let e = eMax &- RawExponent(truncatingIfNeeded: w &- 1)
       x = randomUpToExponent(e, using: &generator)
@@ -309,7 +305,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       let z = n.leadingZeroBitCount &- sectionScale
       precondition(z >= 0)
       
-      let isNormal = z < eMax               // Heterogeneous compare (common)
+      let isNormal = z < eMax
       let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
       
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
@@ -408,7 +404,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     repeat {
       bits = generator.next()
       z = bits.leadingZeroBitCount
-      if e <= z { e = 0; break }      // Heterogeneous compare (unless T == Int)
+      if e <= z { e = 0; break }
       e &-= T(truncatingIfNeeded: z)
     } while bits == 0
     
