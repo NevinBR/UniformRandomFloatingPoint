@@ -56,7 +56,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // nearest representable floating-point value.
   //
   // The general strategy is to expand the range so its bounds are equal and
-  // opposite powers of 2. Split that new range into 2^64 equal sections, and
+  // opposite powers of 2. Split that new range into 2^60 equal sections*, and
   // note that each section either fits in a single raw binade, or it has 0 as
   // one bound and a power of 2 as the other.
   //
@@ -68,6 +68,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // To reduce the probability of landing outside the original range, we handle
   // very small ranges separately, where the span can be counted in terms of
   // the smallest ulp in the range without overflowing.
+  //
+  // * We use only 2^60 sections rather than 2^64 for optimization reasons as
+  //   described in the comment for `sectionScale` at the end of the file.
   static func uniformRandomRoundedDown<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self {
     precondition(!range.isEmpty)
     precondition(range.lowerBound.isFinite)
@@ -115,7 +118,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // General case
     //
     // Take a range centered at 0 with bounds having raw significand 0, which
-    // contains the target range, and divide it into 2^64 equal sections. Find
+    // contains the target range, and divide it into 2^60 equal sections. Find
     // which section the bounds of the original range land in, and choose a
     // section at random between them (inclusive).
     //
@@ -223,32 +226,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   static func sectionsAndExponent(_ range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
     
-    // We increase the exponent, if possible, to reduce the chance that the
-    // `Int64.random(in:)` call will need to generate more than one value.
-    // For example, in cases like -1...1 the range would otherwise span just
-    // over half of all sections.
-    //
-    // If and when the system random number generator becomes fast enough that
-    // this optimization can be removed, it will still be necessary to add 1
-    // to m.exponentBitPattern, unless m.significandBitPattern == 0.
-    //
-    // We choose to increase by 5 in order to optimize for Double. Without the
-    // increase, there are 2^62 section numbers for the largest raw binade in
-    // the range, and Double has 52 significand bits. That leaves 10 bits of
-    // slack, and splitting them equally between the exponent and significand
-    // minimizes the odds of needing to generate a second random number.
-    //
-    // Note that Float has 39 bits of slack, so it almost never needs to
-    // generate a separate significand, while Float80 always does.
-    let e: RawExponent
-    
-    if exponentBitCount > 2 {
-      let m = maximumMagnitude(a, b)
-      let d = min(5, infinity.exponentBitPattern &- m.exponentBitPattern)
-      e = m.exponentBitPattern &+ d
-    } else {
-      e = infinity.exponentBitPattern
-    }
+    let m = maximumMagnitude(a, b)
+    var e = m.exponentBitPattern
+    if m.significandBitPattern != 0 { e &+= 1 }
     
     let (low, _) = a.sectionNumber(maxExponent: e)
     let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
@@ -258,17 +238,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   
   // Take the range with bounds having raw exponent equal to maxExponent and
-  // 0 significand, and split it into 2^64 sections. Find which section self
+  // 0 significand, and split it into 2^60 sections. Find which section self
   // falls in.
   func sectionNumber(maxExponent eMax: RawExponent) -> (section: Int64, isLowerBound: Bool) {
-    let (e, s) = (exponentBitPattern, significandBitPattern)
-    
-    if (e == eMax) && (s == 0) {
-      return (self < 0) ? (.min, true) : (.max, false)
-    }
-    
-    precondition(e < eMax, "Exponent exceeds maximum")
-    
     let (n, isLowerBound) = self.unsignedSectionNumber(maxExponent: eMax)
     var section = Int64(bitPattern: n)
     
@@ -281,7 +253,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   
   // Take the range with lower bound 0 and upper bound having raw exponent
-  // equal to maxExponent+1 and 0 significand, and split it into 2^64 sections.
+  // equal to maxExponent+1 and 0 significand, and split it into 2^60 sections.
   // Find which section the absolute value of self falls in.
   func unsignedSectionNumber(maxExponent eMax: RawExponent) -> (section: UInt64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
@@ -291,7 +263,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     if self == 0 { return (section: 0, isLowerBound: true) }
     
-    let w = UInt64.bitWidth &- 1
+    let w = UInt64.bitWidth &- 1 &- Self.sectionScale
     let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
     
     if z >= w {                 // Heterogeneous compare (common)
@@ -323,8 +295,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // Get a random number in a single section.
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
-    let n = UInt64(bitPattern: (section < 0) ? ~section : section)
-    let w = UInt64.bitWidth
+    let k = (section < 0) ? ~section : section
+    let n = UInt64(bitPattern: k)
+    let w = UInt64.bitWidth &- sectionScale
     let x: Self
     
     if (n == 0) && (eMax >= w) {            // Heterogeneous compare (rare)
@@ -333,7 +306,9 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       x = randomUpToExponent(e, using: &generator)
     } else {
       // Every other section fits in a single raw binade
-      let z = n.leadingZeroBitCount
+      let z = n.leadingZeroBitCount &- sectionScale
+      precondition(z >= 0)
+      
       let isNormal = z < eMax               // Heterogeneous compare (common)
       let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
       
@@ -463,4 +438,25 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   static var significandHighBit: RawSignificand {
     return (1 as RawSignificand) &<< (RawSignificand.bitWidth &- 1)
   }
+  
+  
+  // We do not use the high bits of section numbers, to reduce the chance that
+  // the `Int64.random(in:)` call in the general-case `while loop` will itself
+  // need to call `next()` more than once.
+  //
+  // Ranges like -1.0...1.0 would otherwise span just over half of all sections,
+  // meaning `random(in:)` would on average call `next()` twice. Each bit we
+  // do not use effectively halves the probability of a 2nd call to `next()`.
+  //
+  // We choose to skip 4 bits in order to optimize for Double, which has 52
+  // significand bits. Ordinarily, without this optimization, there would be
+  // 2^61 section numbers for the 2nd-largest binade in a range, which leaves
+  // 9 bits of slack for Double.
+  //
+  // We take 4 of them here to making choosing a section faster, and leave 5 of
+  // them for keeping the sections small. When every representable value in a
+  // raw binade lands in a separate section, then we do not need to generate a
+  // significand separately because each section has only one value.
+  @inline(__always)
+  static var sectionScale: Int { 4 }
 }
