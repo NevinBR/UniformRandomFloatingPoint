@@ -186,8 +186,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
         isLowerBound = s == (usableBits &<< -shift)
         n = UInt64(truncatingIfNeeded: usableBits)
       } else {
-        n = UInt64(truncatingIfNeeded: s) &<< shift
         isLowerBound = true
+        n = UInt64(truncatingIfNeeded: s) &<< shift
       }
       
       if e != 0 {
