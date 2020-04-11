@@ -104,11 +104,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     // Ranges that cross up to one raw binade boundary are handled here to
     // ensure the `while true` loop in the general case usually succeeds.
     //
-    // The number 7 is subtracted for implementation reasons, so this path is
-    // only taken when it is possible for more than one representable number in
-    // the second-largest raw binade of the range to fall in the same section.
+    // This only needs to be done when it is possible for more than one
+    // representable number in the second-largest raw binade of the range to
+    // fall in the same section.
     
-    if significandBitCount > Int64.bitWidth - 7 {
+    if significandBitCount > Int64.bitWidth &- sectionScale &- 3  {
       if let x = smallRangeUniformRandom(in: range, using: &generator) {
         return x
       }
