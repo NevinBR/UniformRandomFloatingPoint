@@ -234,7 +234,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     //
     // We choose to increase by 5 in order to optimize for Double. Without the
     // increase, there are 2^62 section numbers for the largest raw binade in
-    // the range, and Double has 52 significand bits. That leave 10 bits of
+    // the range, and Double has 52 significand bits. That leaves 10 bits of
     // slack, and splitting them equally between the exponent and significand
     // minimizes the odds of needing to generate a second random number.
     //
