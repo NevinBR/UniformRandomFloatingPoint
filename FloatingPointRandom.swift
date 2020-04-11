@@ -135,90 +135,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
-  // MARK: Small range
-  
-  // If the range spans 0 or 1 raw binades and its bounds are close enough
-  // together, then the distance between them can be counted in terms of the
-  // smallest ulp in the range.
-  //
-  // For types with spare bits in the significand, this could be done for
-  // ranges that span a larger number of raw binades, but there is little
-  // benefit to doing so.
-  //
-  // The purpose here is to ensure that the large range path is only taken
-  // when there is a low probability of needing multiple attempts. Currently,
-  // that probability is less than 1 in 2^56 in the worst case.
-  static func smallRangeUniformRandom<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self? {
-    let (a, b) = (range.lowerBound, range.upperBound)
-    let aExp = a.exponentBitPattern
-    let bExp = b.exponentBitPattern
-    
-    if a.sign == b.sign {
-      let sign = a.sign
-      let eSpan = (sign == .plus) ? (bExp &- aExp) : (aExp &- bExp)
-      if eSpan > 1 { return nil }
-      
-      let aSig = a.significandBitPattern
-      let bSig = b.significandBitPattern
-      let (low, high) = (sign == .plus) ? (aSig, bSig) : (bSig, aSig)
-      let x: Self
-      
-      if eSpan == 0 {
-        // Single raw binade
-        let s = RawSignificand.random(in: low..<high, using: &generator)
-        x = Self(sign: sign, exponentBitPattern: aExp, significandBitPattern: s)
-        
-      } else {
-        // Adjacent raw binades
-        let eBase = (sign == .plus) ? aExp : bExp
-        let isHigh: Bool
-        let s: RawSignificand
-        
-        if (eBase == 0) && (high <= low) {
-          // One subnormal
-          let span = high &+ (significandBitMask &- low)
-          let r = RawSignificand.random(in: 0...span, using: &generator)
-          isHigh = r < high
-          s = isHigh ? r : low &+ (r &- high)
-          
-        } else if high <= (low &>> 1) {
-          // Both normal
-          let h2 = high &<< 1
-          let span = h2 &+ (significandBitMask &- low)
-          let r = RawSignificand.random(in: 0...span, using: &generator)
-          isHigh = r < h2
-          s = isHigh ? (r &>> 1) : low &+ (r &- h2)
-          
-        } else {
-          // Large range
-          return nil
-        }
-        
-        let e = isHigh ? eBase &+ 1 : eBase
-        x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
-      }
-      
-      return (sign == .plus) ? x : x.nextDown
-      
-    } else if (aExp == 0) && (bExp == 0) {
-      // Subnormal opposite signs
-      let bSig = b.significandBitPattern
-      let span = a.significandBitPattern &+ bSig
-      if span < bSig { return nil }
-      
-      let r = RawSignificand.random(in: 0 ..< span, using: &generator)
-      let sign: FloatingPointSign = (r < bSig) ? .plus : .minus
-      let s = (r < bSig) ? r : r &- bSig &+ 1
-      return Self(sign: sign, exponentBitPattern: 0, significandBitPattern: s)
-      
-    } else {
-      // Large range
-      return nil
-    }
-  }
-  
-  
-  // MARK: Large range
+  // MARK: General case
   
   // Convert a range of Self into a range of Int64 section numbers and the
   // corresponding maximum exponent.
@@ -410,6 +327,89 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let bitCount = (bits == 0) ? 0 : (UInt64.bitWidth &- 1) &- z
     return (e, bits, bitCount)
+  }
+  
+  
+  // MARK: Small range
+  
+  // If the range spans 0 or 1 raw binades and its bounds are close enough
+  // together, then the distance between them can be counted in terms of the
+  // smallest ulp in the range.
+  //
+  // For types with spare bits in the significand, this could be done for
+  // ranges that span a larger number of raw binades, but there is little
+  // benefit to doing so.
+  //
+  // The purpose here is to ensure that the large range path is only taken
+  // when there is a low probability of needing multiple attempts. Currently,
+  // that probability is less than 1 in 2^56 in the worst case.
+  static func smallRangeUniformRandom<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self? {
+    let (a, b) = (range.lowerBound, range.upperBound)
+    let aExp = a.exponentBitPattern
+    let bExp = b.exponentBitPattern
+    
+    if a.sign == b.sign {
+      let sign = a.sign
+      let eSpan = (sign == .plus) ? (bExp &- aExp) : (aExp &- bExp)
+      if eSpan > 1 { return nil }
+      
+      let aSig = a.significandBitPattern
+      let bSig = b.significandBitPattern
+      let (low, high) = (sign == .plus) ? (aSig, bSig) : (bSig, aSig)
+      let x: Self
+      
+      if eSpan == 0 {
+        // Single raw binade
+        let s = RawSignificand.random(in: low..<high, using: &generator)
+        x = Self(sign: sign, exponentBitPattern: aExp, significandBitPattern: s)
+        
+      } else {
+        // Adjacent raw binades
+        let eBase = (sign == .plus) ? aExp : bExp
+        let isHigh: Bool
+        let s: RawSignificand
+        
+        if (eBase == 0) && (high <= low) {
+          // One subnormal
+          let span = high &+ (significandBitMask &- low)
+          let r = RawSignificand.random(in: 0...span, using: &generator)
+          isHigh = r < high
+          s = isHigh ? r : low &+ (r &- high)
+          
+        } else if high <= (low &>> 1) {
+          // Both normal
+          let h2 = high &<< 1
+          let span = h2 &+ (significandBitMask &- low)
+          let r = RawSignificand.random(in: 0...span, using: &generator)
+          isHigh = r < h2
+          s = isHigh ? (r &>> 1) : low &+ (r &- h2)
+          
+        } else {
+          // Large range
+          return nil
+        }
+        
+        let e = isHigh ? eBase &+ 1 : eBase
+        x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
+      }
+      
+      return (sign == .plus) ? x : x.nextDown
+      
+    } else if (aExp == 0) && (bExp == 0) {
+      // Subnormal opposite signs
+      let bSig = b.significandBitPattern
+      let span = a.significandBitPattern &+ bSig
+      if span < bSig { return nil }
+      
+      let r = RawSignificand.random(in: 0 ..< span, using: &generator)
+      let sign: FloatingPointSign = (r < bSig) ? .plus : .minus
+      let s = (r < bSig) ? r : r &- bSig &+ 1
+      return Self(sign: sign, exponentBitPattern: 0, significandBitPattern: s)
+      
+    } else {
+      // Large range
+      return nil
+    }
   }
   
   
