@@ -453,7 +453,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // 2^61 section numbers for the 2nd-largest binade in a range, which leaves
   // 9 bits of slack for Double.
   //
-  // We take 4 of them here to making choosing a section faster, and leave 5 of
+  // We take 4 of them here to make choosing a section faster, and leave 5 of
   // them for keeping the sections small. When every representable value in a
   // raw binade lands in a separate section, then we do not need to generate a
   // significand separately because each section has only one value.
