@@ -310,7 +310,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Int. The alternative was to have two copies, one for Int alone and the
   // other for RawExponent. Making it generic avoids that duplication.
   @inline(__always)
-  @_specialize(kind: partial, where T == Int)
   static func randomExponent<R: RandomNumberGenerator, T: FixedWidthInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
     if upperBound <= 1 { return (0, 0, 0) }
     
