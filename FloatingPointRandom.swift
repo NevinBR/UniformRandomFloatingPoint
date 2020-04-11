@@ -291,7 +291,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     if self == 0 { return (section: 0, isLowerBound: true) }
     
-    let w = UInt64.bitWidth
+    let w = UInt64.bitWidth &- 1
     let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
     
     if z >= w {                 // Heterogeneous compare (common)
@@ -299,7 +299,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       return (0, false)
     }
     
-    let bitsNeeded = w &- 1 &- Int(truncatingIfNeeded: z)
+    let bitsNeeded = w &- Int(truncatingIfNeeded: z)
     let shift = bitsNeeded &- Self.significandBitCount
     
     let n: UInt64
