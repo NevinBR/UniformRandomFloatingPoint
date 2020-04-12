@@ -306,6 +306,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   }
   
   
+  // Choose a raw exponent at random less than upperBound, with probability
+  // proportional to the width of the raw binade with that raw exponent. Also
+  // return any additional random bits that were left over from this process,
+  // and a count of how many.
+  //
   // This function is generic over T because it is faster when specialized for
   // Int. The alternative was to have two copies, one for Int alone and the
   // other for RawExponent. Making it generic avoids that duplication.
@@ -317,15 +322,25 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     var bits: UInt64
     var z: Int
     
+    // Each raw binade (except raw exponent 0) is the same width as all raw
+    // binades below it. So with 50% probability we stop where we are, and with
+    // 50% probability we reduce the exponent, until either we stop or reach 0.
+    //
+    // We use the high bits of a random number to represent these coin flips,
+    // treating 1 as "stop" and 0 as "continue".
     repeat {
       bits = generator.next()
       z = bits.leadingZeroBitCount
-      if e <= z { e = 0; break }
+      if e <= z {
+        // Enough "continues" to reach raw exponent zero.
+        // The rest of the bits are still random.
+        return (0, bits, UInt64.bitWidth &- Int(truncatingIfNeeded: e))
+      }
       e &-= T(truncatingIfNeeded: z)
     } while bits == 0
     
-    let bitCount = (bits == 0) ? 0 : (UInt64.bitWidth &- 1) &- z
-    return (e, bits, bitCount)
+    // All the bits after the first "stop" are still random.
+    return (e, bits, UInt64.bitWidth &- 1 &- z)
   }
   
   
