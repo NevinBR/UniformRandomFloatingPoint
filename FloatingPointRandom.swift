@@ -207,6 +207,19 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   
   // Get a random number in a single section.
+  //
+  // The number of leading zeros (minus the section scale) gives the number of
+  // binades below maxExponent. The raw exponent is found by subtraction, but
+  // not less than zero.
+  //
+  // The remaining bits form the implicit bit and the significand. If there
+  // are not enough bits to fill the significand, that indicates the section
+  // contains multiple representable values. In which case, the low bits are
+  // chosen uniformly at random.
+  //
+  // Section 0 may span multiple raw binades, and is handled specially.
+  //
+  // Negative sections are nearly mirrors of the positive, but off by one.
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let k = (section < 0) ? ~section : section
     let n = UInt64(bitPattern: k)
@@ -255,6 +268,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // MARK: Fast path
   
+  // Choose a random non-negative representable number with raw exponent less
+  // than maxExp, with probability proportional to its ulp.
+  //
+  // If allowNegative is true, then with 50% probability negate the next-higher
+  // representable value and return that instead.
   @inline(__always)
   static func randomUpToExponent<R: RandomNumberGenerator>(_ maxExp: RawExponent, allowNegative: Bool = false, using generator: inout R) -> Self {
     if maxExp == 0 { return 0 }
