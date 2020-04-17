@@ -137,6 +137,63 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   
   // MARK: General case
   
+  // Every raw binade (except raw exponent 0) spans a width equal to that of
+  // all raw binades below it (starting at 0).
+  //
+  // Similarly, the set of integers with the leading 1 in a given position
+  // spans a width equal to that of all smaller integers (starting from 0).
+  //
+  // This correspondence between raw exponents of floating-point numbers on the
+  // one hand, and binary logarithms of integers on the other hand, forms the
+  // basis for our strategy.
+  //
+  // The following diagram illustrates both ideas:
+  //
+  // ________________                |                ________________
+  //                 ________        |        ________
+  //                         ____    |    ____
+  //                             __  |  __
+  //                               _ | _
+  //                                _|_
+  //                                 |
+  //                                 0
+  //
+  // In order to choose a representable number in a given range, we first
+  // extend the range to have bounds at the start of a raw binade, mirrored
+  // about 0, then divide it into 2^60 sections. Note that half (or 2^59) of
+  // those sections are non-negative.
+  //
+  // This lines up raw binades of the extended range with binary logarithms of
+  // 59-bit integers. The number of leading zeros in the integer matches the
+  // difference between the raw exponent of the binade, and the maximum raw
+  // exponent in the extended range.
+  //
+  // The integers represent sections, each of which spans 1 / 2^60 of the
+  // extended range. Section zero, which is bounded below by 0, may span
+  // multiple raw binades. However, each positive section fits within a single
+  // raw binade. Negative sections are essentially mirrored.
+  //
+  // The following diagram shows an example of a range and its extension:
+  //
+  // ________________                |                ________________
+  //                 ________        |        ________     |
+  //                    |    ____    |    ____             |
+  //                    |        __  |  __                 |
+  //                    |          _ | _                   |
+  //                    |           _|_                    |
+  //                    |            |                     |
+  //                    a____________0_____________________b
+  //
+  // By finding the sections that the bounds of the range fall in, we are able
+  // to choose a section between then simply by producing a random integer.
+  // Then we can choose a random floating-point value within that section.
+  //
+  // Most of the time this will land within the original range and we are done.
+  // In the rare case that we selected one of the sections at the ends of the
+  // range, and the value chosen within that section landed outside the range,
+  // we simply try again.
+  
+  
   // Convert a range of Self into a range of Int64 section numbers and the
   // corresponding maximum exponent.
   @inline(__always)
@@ -269,25 +326,25 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // MARK: Fast path
   
   // Choose a random non-negative representable number with raw exponent less
-  // than maxExp, with probability proportional to its ulp.
+  // than eMax, with probability proportional to its ulp.
   //
   // If allowNegative is true, then with 50% probability negate the next-higher
   // representable value and return that instead.
   @inline(__always)
-  static func randomUpToExponent<R: RandomNumberGenerator>(_ maxExp: RawExponent, allowNegative: Bool = false, using generator: inout R) -> Self {
-    if maxExp == 0 { return 0 }
+  static func randomUpToExponent<R: RandomNumberGenerator>(_ eMax: RawExponent, allowNegative: Bool = false, using generator: inout R) -> Self {
+    if eMax == 0 { return 0 }
     
     let e: RawExponent
     var bits: UInt64
     var bitCount: Int
     
-    if (exponentBitCount < Int.bitWidth) || (maxExp._binaryLogarithm() < Int.bitWidth &- 1) {
-      // maxExp fits in an Int, so use the specialized version
-      var eInt = Int(truncatingIfNeeded: maxExp)
+    if (exponentBitCount < Int.bitWidth) || (eMax._binaryLogarithm() < Int.bitWidth &- 1) {
+      // eMax fits in an Int, so use the specialized version
+      var eInt = Int(truncatingIfNeeded: eMax)
       (eInt, bits, bitCount) = randomExponent(upperBound: eInt, using: &generator)
       e = RawExponent(truncatingIfNeeded: eInt)
     } else {
-      (e, bits, bitCount) = randomExponent(upperBound: maxExp, using: &generator)
+      (e, bits, bitCount) = randomExponent(upperBound: eMax, using: &generator)
     }
     
     let shortOnBits = bitCount < significandBitCount
