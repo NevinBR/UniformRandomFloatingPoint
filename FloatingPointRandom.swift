@@ -6,14 +6,14 @@
 // choosing a real number in the range, and rounding down to the next
 // representible value. For closed ranges, we extend it into a half-open range
 // bounded by upperBound.nextUp
-
+//
 // Note on terminology: this file uses "binade" pervasively to refer to the
 // set of all floating-point values with the same sign and raw exponent. When
 // the word "binade" appears below, it has that meaning. The implementation
 // cares about values with the same raw exponent, and the word "binade" is
 // repurposed for that definition here.
 
-extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExponent: FixedWidthInteger {
+extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // MARK: Range
   
   // Generate a random floating-point value in a range.
@@ -202,7 +202,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     let m = maximumMagnitude(a, b)
     var e = m.exponentBitPattern
-    if m.significandBitPattern != 0 { e &+= 1 }
+    if m.significandBitPattern != 0 { e += 1 }
     
     let (low, _) = a.sectionNumber(maxExponent: e)
     let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
@@ -231,7 +231,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     let isLowerBound: Bool
     
     let w = UInt64.bitWidth &- Self.sectionScale &- 1
-    let z = eMax &- max(1, e)   // Number of leading zeros before implicit bit
+    let z = eMax - max(1, e)   // Number of leading zeros before implicit bit
     
     if z < w {
       // We will need (w - z) significand bits.
@@ -285,7 +285,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     if (n == 0) && (eMax >= w) {
       // Section 0 spanning at least one full raw binade
-      let e = eMax &- RawExponent(truncatingIfNeeded: w &- 1)
+      let e = eMax - RawExponent(truncatingIfNeeded: w &- 1)
       x = randomUpToExponent(e, using: &generator)
     } else {
       // Every other section fits in a single raw binade
@@ -293,7 +293,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
       precondition(z >= 0)
       
       let isNormal = z < eMax
-      let e = isNormal ? eMax &- RawExponent(truncatingIfNeeded: z) : 0
+      let e = isNormal ? eMax - RawExponent(truncatingIfNeeded: z) : 0
       
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
       let availableBitCount = w &- unusedBitCount
@@ -390,10 +390,10 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
   // Int. The alternative was to have two copies, one for Int alone and the
   // other for RawExponent. Making it generic avoids that duplication.
   @inline(__always)
-  static func randomExponent<R: RandomNumberGenerator, T: FixedWidthInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
+  static func randomExponent<R: RandomNumberGenerator, T: BinaryInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
     if upperBound <= 1 { return (0, 0, 0) }
     
-    var e = upperBound &- 1
+    var e = upperBound - 1
     var bits: UInt64
     var z: Int
     
@@ -411,7 +411,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
         // The rest of the bits are still random.
         return (0, bits, UInt64.bitWidth &- Int(truncatingIfNeeded: e))
       }
-      e &-= T(truncatingIfNeeded: z)
+      e -= T(truncatingIfNeeded: z)
     } while bits == 0
     
     // All the bits after the first "stop" are still random.
@@ -439,7 +439,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
     
     if a.sign == b.sign {
       let sign = a.sign
-      let eSpan = (sign == .plus) ? (bExp &- aExp) : (aExp &- bExp)
+      let eSpan = (sign == .plus) ? (bExp - aExp) : (aExp - bExp)
       if eSpan > 1 { return nil }
       
       let aSig = a.significandBitPattern
@@ -478,7 +478,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger, RawExpone
           return nil
         }
         
-        let e = isHigh ? eBase &+ 1 : eBase
+        let e = isHigh ? eBase + 1 : eBase
         x = Self(sign: sign, exponentBitPattern: e, significandBitPattern: s)
       }
       
