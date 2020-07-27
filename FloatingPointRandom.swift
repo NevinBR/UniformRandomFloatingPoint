@@ -1,4 +1,4 @@
-// Author: Nevin Brackett-Rozinsky, with help from Jens Persson (@jens-bc)
+// Author: Nevin Brackett-Rozinsky
 //
 // This is a proof-of-concept implementation to generate random floating-point
 // numbers, with probability proportional to the distance between each
@@ -239,15 +239,23 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       let shift = bitsNeeded &- Self.significandBitCount
       
       if shift < 0 {
+        // It is okay to use `&>>` here because `-shift` is less than
+        // `Self.significandBitCount`. We know this because (z < w) implies
+        // (bitsNeeded >= 1), so (shift >= 1 - Self.significandBitCount).
         let usableBits = s &>> -shift
         isLowerBound = s == (usableBits &<< -shift)
         n = UInt64(truncatingIfNeeded: usableBits)
+        
       } else {
-        isLowerBound = true
+        // It is okay to use `&<<` here because `shift` is less than
+        // `UInt64.bitWidth`. We know this because:
+        // shift <= bitsNeeded < w < UInt64.bitWidth
         n = UInt64(truncatingIfNeeded: s) &<< shift
+        isLowerBound = true
       }
       
       if e != 0 {
+        // As above, `&<<` is okay because (bitsNeeded < UInt64.bitWidth).
         n |= (1 &<< bitsNeeded)
       }
     } else if (z == w) && (e != 0) {
@@ -288,13 +296,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       let e = eMax - RawExponent(truncatingIfNeeded: w &- 1)
       x = randomUpToExponent(e, using: &generator)
     } else {
-      // Every other section fits in a single raw binade
+      // Each other section fits in a single raw binade
       let z = n.leadingZeroBitCount &- sectionScale
       precondition(z >= 0)
       
       let isNormal = z < eMax
       let e = isNormal ? eMax - RawExponent(truncatingIfNeeded: z) : 0
-      
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
       let availableBitCount = w &- unusedBitCount
       let shift = significandBitCount &- availableBitCount
@@ -302,20 +309,14 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       var s: RawSignificand
       
       if shift <= 0 {
-        s = RawSignificand(truncatingIfNeeded: n &>> -shift)
+        s = RawSignificand(truncatingIfNeeded: n >> -shift)
       } else {
         s = generator.next()
-        
-        // This condition is always true for types with at least 1 spare
-        // significand bit, including Float, Double, and Float80.
-        // Note that `shift <= significandBitCount` is always true.
-        if (spareBitCount != 0) || (shift < significandBitCount) {
-          s &= (1 &<< shift) &- 1
-          s |= RawSignificand(truncatingIfNeeded: n) &<< shift
-        }
+        s &= (1 << shift) &- 1
+        s |= RawSignificand(truncatingIfNeeded: n) << shift
       }
       
-      s &= significandBitMask
+      s &= significandMask
       x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
     
@@ -338,7 +339,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     var bits: UInt64
     var bitCount: Int
     
-    if (exponentBitCount < Int.bitWidth) || (eMax._binaryLogarithm() < Int.bitWidth &- 1) {
+    if (exponentBitCount < Int.bitWidth) || (eMax <= Int.max) {
       // eMax fits in an Int, so use the specialized version
       var eInt = Int(truncatingIfNeeded: eMax)
       (eInt, bits, bitCount) = randomExponent(upperBound: eInt, using: &generator)
@@ -347,36 +348,33 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       (e, bits, bitCount) = randomExponent(upperBound: eMax, using: &generator)
     }
     
-    let shortOnBits = bitCount < significandBitCount
-    let s: RawSignificand
+    var s: RawSignificand
     
-    if shortOnBits {
-      let r = generator.next() as RawSignificand
+    if bitCount < significandBitCount {
+      s = generator.next()
       
-      if spareBitCount != 0 {
-        // Save one bit for later. Technically we only need to do this if
-        // allowNegative is true and bitCount is 0.
-        bits = (r & uncheckedImplicitBit) == 0 ? 0 : 1
-        bitCount = 1
+      if bitCount == 0 {
+        bits = UInt64(truncatingIfNeeded: s >> significandBitCount)
+        bitCount = RawSignificand.bitWidth &- significandBitCount
       }
-      s = r & significandBitMask
-
     } else {
-      s = RawSignificand(truncatingIfNeeded: bits) & significandBitMask
+      s = RawSignificand(truncatingIfNeeded: bits)
+      bits >>= significandBitCount
       bitCount &-= significandBitCount
     }
     
-    let x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
-    if !allowNegative { return x }
+    var isNegative = false
     
-    let isNegative: Bool
-    
-    if bitCount == 0 {
-      isNegative = Bool.random(using: &generator)
-    } else {
-      let nextBit: UInt64 = shortOnBits ? 1 : 1 &<< significandBitCount
-      isNegative = (bits & nextBit) == 0
+    if allowNegative {
+      if bitCount == 0 {
+        isNegative = Bool.random(using: &generator)
+      } else {
+        isNegative = (bits & 1) == 0
+      }
     }
+    
+    s &= significandMask
+    let x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     return isNegative ? -x.nextUp : x
   }
   
@@ -460,7 +458,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
         
         if (eBase == 0) && (high <= low) {
           // One subnormal
-          let span = high &+ (significandBitMask &- low)
+          let span = high &+ (significandMask &- low)
           let r = RawSignificand.random(in: 0...span, using: &generator)
           isHigh = r < high
           s = isHigh ? r : low &+ (r &- high)
@@ -468,7 +466,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
         } else if high <= (low &>> 1) {
           // Both normal
           let h2 = high &<< 1
-          let span = h2 &+ (significandBitMask &- low)
+          let span = h2 &+ (significandMask &- low)
           let r = RawSignificand.random(in: 0...span, using: &generator)
           isHigh = r < h2
           s = isHigh ? (r &>> 1) : low &+ (r &- h2)
@@ -502,26 +500,13 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   }
   
   
-  // MARK: Helper methods
+  // MARK: Helpers
   
   @inline(__always)
-  static var significandBitMask: RawSignificand {
-    return (spareBitCount == 0) ? .max : (uncheckedImplicitBit &- 1)
-  }
-  
-  @inline(__always)
-  static var spareBitCount: Int {
-    return RawSignificand.bitWidth &- significandBitCount
-  }
-  
-  @inline(__always)
-  static var uncheckedImplicitBit: RawSignificand {
-    return 1 &<< significandBitCount
-  }
-  
-  @inline(__always)
-  static var significandHighBit: RawSignificand {
-    return (1 as RawSignificand) &<< (RawSignificand.bitWidth &- 1)
+  static var significandMask: RawSignificand {
+    // We use `<<` here because it is possible that a floating-point type
+    // could have (significandBitCount == RawSignificand.bitwidth).
+    return (1 << significandBitCount) &- 1
   }
   
   
