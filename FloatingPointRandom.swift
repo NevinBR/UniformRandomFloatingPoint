@@ -196,7 +196,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   
   // Convert a range of Self into a range of Int64 section numbers and the
   // corresponding maximum exponent.
-  @inline(__always)
   static func sectionsAndExponent(_ range: Range<Self>) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
     
@@ -331,7 +330,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   //
   // If allowNegative is true, then with 50% probability negate the next-higher
   // representable value and return that instead.
-  @inline(__always)
   static func randomUpToExponent<R: RandomNumberGenerator>(_ eMax: RawExponent, allowNegative: Bool = false, using generator: inout R) -> Self {
     if eMax == 0 { return 0 }
     
@@ -387,7 +385,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // This function is generic over T because it is faster when specialized for
   // Int. The alternative was to have two copies, one for Int alone and the
   // other for RawExponent. Making it generic avoids that duplication.
-  @inline(__always)
   static func randomExponent<R: RandomNumberGenerator, T: BinaryInteger>(upperBound: T, using generator: inout R) -> (e: T, bits: UInt64, bitCount: Int) {
     if upperBound <= 1 { return (0, 0, 0) }
     
