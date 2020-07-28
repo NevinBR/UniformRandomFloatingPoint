@@ -70,7 +70,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // the smallest ulp in the range without overflowing.
   //
   // * We use only 2^60 sections rather than 2^64 for optimization reasons as
-  //   described in the comment for `sectionScale` at the end of the file.
+  //   described in the comment for `sectionBits` at the end of the file.
   static func uniformRandomRoundedDown<R: RandomNumberGenerator>(in range: Range<Self>, using generator: inout R) -> Self {
     precondition(!range.isEmpty)
     precondition(range.lowerBound.isFinite)
@@ -108,7 +108,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     // representable number in the second-largest raw binade of the range to
     // fall in the same section.
     
-    if significandBitCount > Int64.bitWidth &- sectionScale &- 3  {
+    if significandBitCount > sectionBits &- 3  {
       if let x = smallRangeUniformRandom(in: range, using: &generator) {
         return x
       }
@@ -215,9 +215,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // falls in.
   //
   // The section number for a non-negative value is equal to its significand
-  // (including implicit bit), shifted so there are (eMax - e + sectionScale)
-  // zeros before the implicit bit. Negative numbers have their section offset
-  // by 1, except at the boundary between sections.
+  // (including implicit bit), shifted so the number of zeros before the
+  // implicit bit equals (eMax - e + 64 - sectionBits).
+  //
+  // The section number of a negative value can be found by taking the negative
+  // of the section number of its absolute value, and subtracting 1 unless the
+  // number is on the boundary between sections.
   func sectionNumber(maxExponent eMax: RawExponent) -> (section: Int64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
@@ -229,7 +232,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     var n: UInt64
     let isLowerBound: Bool
     
-    let w = UInt64.bitWidth &- Self.sectionScale &- 1
+    let w = Self.sectionBits &- 1
     let z = eMax - max(1, e)   // Number of leading zeros before implicit bit
     
     if z < w {
@@ -287,22 +290,21 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   static func uniformRandomInSection<R: RandomNumberGenerator>(_ section: Int64, maxExponent eMax: RawExponent, using generator: inout R) -> Self {
     let k = (section < 0) ? ~section : section
     let n = UInt64(bitPattern: k)
-    let w = UInt64.bitWidth &- sectionScale
     let x: Self
     
-    if (n == 0) && (eMax >= w) {
+    if (n == 0) && (eMax >= sectionBits) {
       // Section 0 spanning at least one full raw binade
-      let e = eMax - RawExponent(truncatingIfNeeded: w &- 1)
+      let e = eMax - RawExponent(truncatingIfNeeded: sectionBits &- 1)
       x = randomUpToExponent(e, using: &generator)
     } else {
       // Each other section fits in a single raw binade
-      let z = n.leadingZeroBitCount &- sectionScale
+      let z = n.leadingZeroBitCount &- (UInt64.bitWidth - sectionBits)
       precondition(z >= 0)
       
       let isNormal = z < eMax
       let e = isNormal ? eMax - RawExponent(truncatingIfNeeded: z) : 0
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
-      let availableBitCount = w &- unusedBitCount
+      let availableBitCount = sectionBits &- unusedBitCount
       let shift = significandBitCount &- availableBitCount
       
       var s: RawSignificand
@@ -525,5 +527,5 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // raw binade lands in a separate section, then we do not need to generate a
   // significand separately because each section has only one value.
   @inline(__always)
-  static var sectionScale: Int { 4 }
+  static var sectionBits: Int { UInt64.bitWidth - 4 }
 }
