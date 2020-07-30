@@ -92,17 +92,6 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // The integer 0 represents a section which begins at 0 and has the same
   // length as all other sections. Similarly, negative integers represent
   // sections of the same length extending below zero.
-  //
-  // The following diagram illustrates this:
-  //
-  // ________________                |                ________________
-  //                 ________        |        ________
-  //                         ____    |    ____
-  //                             __  |  __
-  //                               _ | _
-  //                                _|_
-  //                                 |
-  //                                 0
   private static func _uniformRandomRoundedDown<R: RandomNumberGenerator>(
     in range: Range<Self>, using generator: inout R
   ) -> Self {
