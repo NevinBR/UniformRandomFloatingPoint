@@ -24,7 +24,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     in range: Range<Self>, using generator: inout R
   ) -> Self {
     precondition(range.upperBound.isFinite)
-    return uniformRandomRoundedDown(in: range, using: &generator)
+    return _uniformRandomRoundedDown(in: range, using: &generator)
   }
   
   // Generate a random floating-point value in a closed range.
@@ -40,11 +40,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   ) -> Self {
     precondition(range.upperBound.isFinite)
     let extendedRange = range.lowerBound ..< range.upperBound.nextUp
-    return uniformRandomRoundedDown(in: extendedRange, using: &generator)
+    return _uniformRandomRoundedDown(in: extendedRange, using: &generator)
   }
   
   
-  // MARK: Implementation
+  // MARK: Implementation details
   
   // Generate a random floating-point value in the specified range, as if a real
   // number were chosen uniformly at random from that range then rounded down to
@@ -103,7 +103,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   //                                _|_
   //                                 |
   //                                 0
-  static func uniformRandomRoundedDown<R: RandomNumberGenerator>(
+  private static func _uniformRandomRoundedDown<R: RandomNumberGenerator>(
     in range: Range<Self>, using generator: inout R
   ) -> Self {
     precondition(!range.isEmpty)
@@ -120,11 +120,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       let (aExp, bExp) = (a.exponentBitPattern, b.exponentBitPattern)
       
       if aExp == 0 {
-        return randomUpToExponent(bExp, using: &generator)
+        return _randomUpToExponent(bExp, using: &generator)
       } else if a == -b {
-        return randomUpToExponent(bExp, allowNegative: true, using: &generator)
+        return _randomUpToExponent(bExp, allowNegative: true, using: &generator)
       } else if bExp == 0 {
-        return -randomUpToExponent(aExp, using: &generator).nextUp
+        return -_randomUpToExponent(aExp, using: &generator).nextUp
       }
     }
     
@@ -136,8 +136,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     // This only needs to be done when it is possible for more than one
     // representable number in the second-largest raw binade of the range to
     // fall in a single section.
-    if significandBitCount > sectionBits &- 3  {
-      if let x = smallRangeUniformRandom(in: range, using: &generator) {
+    if significandBitCount > _sectionBitCount &- 3  {
+      if let x = _smallRangeUniformRandom(in: range, using: &generator) {
         return x
       }
     }
@@ -147,11 +147,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     // Expand the range to be centered at 0, with bounds having all significand
     // bits equal to 0. Divide it into 2^60 equal sections, and find which
     // sections intersect the original range.
-    let (sections, e) = sectionsAndExponent(range)
+    let (sections, e) = _sectionsAndExponent(range)
     
     while true {
       let n = Int64.random(in: sections, using: &generator)
-      let x = uniformRandomInSection(n, maxExponent: e, using: &generator)
+      let x = _uniformRandomInSection(n, maxExponent: e, using: &generator)
       if range.contains(x) { return x }
     }
   }
@@ -161,7 +161,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   
   // Convert a range of Self into a range of Int64 section numbers and the
   // corresponding maximum exponent.
-  static func sectionsAndExponent(
+  private static func _sectionsAndExponent(
     _ range: Range<Self>
   ) -> (sections: ClosedRange<Int64>, maxExponent: RawExponent) {
     let (a, b) = (range.lowerBound, range.upperBound)
@@ -170,8 +170,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     var e = m.exponentBitPattern
     if m.significandBitPattern != 0 { e += 1 }
     
-    let (low, _) = a.sectionNumber(maxExponent: e)
-    let (h, isLowerBound) = b.sectionNumber(maxExponent: e)
+    let (low, _) = a._sectionNumber(maxExponent: e)
+    let (h, isLowerBound) = b._sectionNumber(maxExponent: e)
     let high = isLowerBound ? h &- 1 : h
     return (low...high, e)
   }
@@ -180,7 +180,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // exponent from the maximum allowed, to obtain the number of leading zeros
   // in the section number. Then shift its significand bits (including the
   // implicit bit) to that position.
-  func sectionNumber(
+  private func _sectionNumber(
     maxExponent eMax: RawExponent
   ) -> (section: Int64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
@@ -193,7 +193,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     var n: UInt64
     let isLowerBound: Bool
     
-    let w = Self.sectionBits &- 1
+    let w = Self._sectionBitCount &- 1
     let z = eMax - max(1, e)   // Number of leading zeros before implicit bit
     
     if z < w {
@@ -245,7 +245,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   //
   // Section 0 may span multiple raw binades, and is handled specially. Negative
   // sections are nearly mirrors of the positive, but off by one.
-  static func uniformRandomInSection<R: RandomNumberGenerator>(
+  private static func _uniformRandomInSection<R: RandomNumberGenerator>(
     _ section: Int64,
     maxExponent eMax: RawExponent,
     using generator: inout R
@@ -254,19 +254,19 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     let n = UInt64(bitPattern: k)
     let x: Self
     
-    if (n == 0) && (eMax >= sectionBits) {
+    if (n == 0) && (eMax >= _sectionBitCount) {
       // Section 0 spanning at least one full raw binade
-      let e = eMax - RawExponent(truncatingIfNeeded: sectionBits &- 1)
-      x = randomUpToExponent(e, using: &generator)
+      let e = eMax - RawExponent(truncatingIfNeeded: _sectionBitCount &- 1)
+      x = _randomUpToExponent(e, using: &generator)
     } else {
       // Each other section fits in a single raw binade
-      let z = n.leadingZeroBitCount &- (UInt64.bitWidth - sectionBits)
+      let z = n.leadingZeroBitCount &- (UInt64.bitWidth - _sectionBitCount)
       precondition(z >= 0)
       
       let isNormal = z < eMax
       let e = isNormal ? eMax - RawExponent(truncatingIfNeeded: z) : 0
       let unusedBitCount = isNormal ? z &+ 1 : Int(truncatingIfNeeded: eMax)
-      let availableBitCount = sectionBits &- unusedBitCount
+      let availableBitCount = _sectionBitCount &- unusedBitCount
       let shift = significandBitCount &- availableBitCount
       
       var s: RawSignificand
@@ -279,7 +279,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
         s |= RawSignificand(truncatingIfNeeded: n) << shift
       }
       
-      s &= significandMask
+      s &= _significandMask
       x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     }
     
@@ -291,7 +291,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   
   // Choose a uniformly random representable number with raw exponent less than
   // eMax. If allowNegative is true, then make it negative half the time.
-  static func randomUpToExponent<R: RandomNumberGenerator>(
+  private static func _randomUpToExponent<R: RandomNumberGenerator>(
     _ eMax: RawExponent,
     allowNegative: Bool = false,
     using generator: inout R
@@ -304,11 +304,11 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     
     if (exponentBitCount < Int.bitWidth) || (eMax <= Int.max) {
       // eMax fits in an Int, so use the specialized version
-      var eInt = Int(truncatingIfNeeded: eMax)
-      (eInt, bits, bitCount) = randomExponent(upperBound: eInt, using: &generator)
-      e = RawExponent(truncatingIfNeeded: eInt)
+      var i = Int(truncatingIfNeeded: eMax)
+      (i, bits, bitCount) = _randomExponent(upperBound: i, using: &generator)
+      e = RawExponent(truncatingIfNeeded: i)
     } else {
-      (e, bits, bitCount) = randomExponent(upperBound: eMax, using: &generator)
+      (e, bits, bitCount) = _randomExponent(upperBound: eMax, using: &generator)
     }
     
     var s: RawSignificand
@@ -336,7 +336,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
       }
     }
     
-    s &= significandMask
+    s &= _significandMask
     let x = Self(sign: .plus, exponentBitPattern: e, significandBitPattern: s)
     return isNegative ? -x.nextUp : x
   }
@@ -348,10 +348,12 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   //
   // This function is generic over T because it is faster for Int, but also
   // needs to work for RawExponent.
-  static func randomExponent<R: RandomNumberGenerator, T: BinaryInteger>(
+  private static func _randomExponent<T, R>(
     upperBound: T,
     using generator: inout R
-  ) -> (e: T, bits: UInt64, bitCount: Int) {
+  ) -> (e: T, bits: UInt64, bitCount: Int)
+    where R: RandomNumberGenerator, T: BinaryInteger
+  {
     if upperBound <= 1 { return (0, 0, 0) }
     
     var e = upperBound - 1
@@ -390,7 +392,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // The purpose here is to ensure that the large range path is only taken
   // when there is a low probability of needing multiple attempts. Currently,
   // that probability is less than 1 in 2^56 in the worst case.
-  static func smallRangeUniformRandom<R: RandomNumberGenerator>(
+  private static func _smallRangeUniformRandom<R: RandomNumberGenerator>(
     in range: Range<Self>,
     using generator: inout R
   ) -> Self? {
@@ -421,7 +423,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
         
         if (eBase == 0) && (high <= low) {
           // One subnormal
-          let span = high &+ (significandMask &- low)
+          let span = high &+ (_significandMask &- low)
           let r = RawSignificand.random(in: 0...span, using: &generator)
           isHigh = r < high
           s = isHigh ? r : low &+ (r &- high)
@@ -429,7 +431,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
         } else if high <= (low &>> 1) {
           // Both normal
           let h2 = high &<< 1
-          let span = h2 &+ (significandMask &- low)
+          let span = h2 &+ (_significandMask &- low)
           let r = RawSignificand.random(in: 0...span, using: &generator)
           isHigh = r < h2
           s = isHigh ? (r &>> 1) : low &+ (r &- h2)
@@ -466,9 +468,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // MARK: Helpers
   
   @inline(__always)
-  static var significandMask: RawSignificand {
-    // We use `<<` here because it is possible that a floating-point type
-    // could have (significandBitCount == RawSignificand.bitwidth).
+  internal static var _significandMask: RawSignificand {
+    // We use `<<` in case significandBitCount == RawSignificand.bitwidth
     return (1 << significandBitCount) &- 1
   }
   
@@ -489,5 +490,5 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   // them to keep the sections small, because when each section in a raw binade
   // contains only one value, then we do not need to generate a significand.
   @inline(__always)
-  static var sectionBits: Int { UInt64.bitWidth - 4 }
+  private static var _sectionBitCount: Int { UInt64.bitWidth - 4 }
 }
