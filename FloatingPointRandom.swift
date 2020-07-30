@@ -184,9 +184,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     maxExponent eMax: RawExponent
   ) -> (section: Int64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
-    
-    // _internalInvariant
-    precondition((eMax != 0) && (e <= eMax), "Exponent out of range")
+    assert((eMax != 0) && (e <= eMax))
     
     if self == 0 { return (section: 0, isLowerBound: true) }
     
@@ -261,9 +259,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     } else {
       // Each other section fits in a single raw binade
       let z = n.leadingZeroBitCount &- (UInt64.bitWidth - _sectionBitCount)
-      
-      // _internalInvariant
-      precondition(z >= 0)
+      assert(z >= 0)
       
       let isNormal = z < eMax
       let e = isNormal ? eMax - RawExponent(truncatingIfNeeded: z) : 0
