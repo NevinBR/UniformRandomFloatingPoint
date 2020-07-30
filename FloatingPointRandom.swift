@@ -185,8 +185,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
   ) -> (section: Int64, isLowerBound: Bool) {
     let (e, s) = (exponentBitPattern, significandBitPattern)
     
-    precondition(eMax > 0)
-    precondition(e <= eMax, "Exponent exceeds maximum")
+    // _internalInvariant
+    precondition((eMax != 0) && (e <= eMax), "Exponent out of range")
     
     if self == 0 { return (section: 0, isLowerBound: true) }
     
@@ -261,6 +261,8 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     } else {
       // Each other section fits in a single raw binade
       let z = n.leadingZeroBitCount &- (UInt64.bitWidth - _sectionBitCount)
+      
+      // _internalInvariant
       precondition(z >= 0)
       
       let isNormal = z < eMax
@@ -303,7 +305,7 @@ extension BinaryFloatingPoint where RawSignificand: FixedWidthInteger {
     var bitCount: Int
     
     if (exponentBitCount < Int.bitWidth) || (eMax <= Int.max) {
-      // eMax fits in an Int, so use the specialized version
+      // This branch is purely for optimizing speed
       var i = Int(truncatingIfNeeded: eMax)
       (i, bits, bitCount) = _randomExponent(upperBound: i, using: &generator)
       e = RawExponent(truncatingIfNeeded: i)
